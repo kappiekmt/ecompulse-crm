@@ -1,12 +1,17 @@
 import {
   LayoutDashboard,
   Users,
-  PhoneCall,
-  GraduationCap,
-  Wallet,
-  BarChart3,
-  Settings,
-  Workflow,
+  GitBranch,
+  BookUser,
+  MessagesSquare,
+  AtSign,
+  UsersRound,
+  Upload,
+  CreditCard,
+  Tags,
+  Plug,
+  HelpCircle,
+  Command,
   type LucideIcon,
 } from "lucide-react"
 import type { TeamRole } from "@/lib/database.types"
@@ -18,58 +23,61 @@ export interface NavItem {
   roles: TeamRole[]
 }
 
-export const NAV_ITEMS: NavItem[] = [
+export interface NavSection {
+  label: string | null
+  items: NavItem[]
+}
+
+export const NAV_SECTIONS: NavSection[] = [
   {
-    label: "Dashboard",
-    to: "/",
-    icon: LayoutDashboard,
-    roles: ["admin", "closer", "setter", "coach"],
+    label: null,
+    items: [
+      {
+        label: "Dashboard",
+        to: "/",
+        icon: LayoutDashboard,
+        roles: ["admin", "closer", "setter", "coach"],
+      },
+      {
+        label: "Command Center",
+        to: "/command-center",
+        icon: Command,
+        roles: ["admin", "closer", "setter"],
+      },
+    ],
   },
   {
-    label: "Pipeline",
-    to: "/pipeline",
-    icon: PhoneCall,
-    roles: ["admin", "closer", "setter"],
+    label: "Sales",
+    items: [
+      { label: "Leads", to: "/leads", icon: Users, roles: ["admin", "closer", "setter"] },
+      { label: "Pipeline", to: "/pipeline", icon: GitBranch, roles: ["admin", "closer", "setter"] },
+      { label: "Directory", to: "/directory", icon: BookUser, roles: ["admin", "closer", "setter", "coach"] },
+    ],
   },
   {
-    label: "Leads",
-    to: "/leads",
-    icon: Users,
-    roles: ["admin", "closer", "setter"],
+    label: "Communication",
+    items: [
+      { label: "DM Chat", to: "/dm-chat", icon: MessagesSquare, roles: ["admin", "closer", "setter"] },
+      { label: "IG Chat", to: "/ig-chat", icon: AtSign, roles: ["admin", "closer", "setter"] },
+    ],
   },
   {
-    label: "Students",
-    to: "/students",
-    icon: GraduationCap,
-    roles: ["admin", "coach"],
-  },
-  {
-    label: "Finance",
-    to: "/finance",
-    icon: Wallet,
-    roles: ["admin"],
-  },
-  {
-    label: "Reports",
-    to: "/reports",
-    icon: BarChart3,
-    roles: ["admin"],
-  },
-  {
-    label: "Automations",
-    to: "/automations",
-    icon: Workflow,
-    roles: ["admin"],
-  },
-  {
-    label: "Team",
-    to: "/team",
-    icon: Settings,
-    roles: ["admin"],
+    label: "Agency",
+    items: [
+      { label: "Team", to: "/team", icon: UsersRound, roles: ["admin"] },
+      { label: "Import Leads", to: "/import-leads", icon: Upload, roles: ["admin"] },
+      { label: "Import Payments", to: "/import-payments", icon: CreditCard, roles: ["admin"] },
+      { label: "Lead Tags", to: "/lead-tags", icon: Tags, roles: ["admin"] },
+      { label: "Integrations", to: "/integrations", icon: Plug, roles: ["admin"] },
+      { label: "Help & SOPs", to: "/help", icon: HelpCircle, roles: ["admin", "closer", "setter", "coach"] },
+    ],
   },
 ]
 
-export function navItemsForRole(role: TeamRole | null | undefined): NavItem[] {
-  if (!role) return []
-  return NAV_ITEMS.filter((item) => item.roles.includes(role))
+export function navSectionsForRole(role: TeamRole | null | undefined): NavSection[] {
+  const r = role ?? "admin"
+  return NAV_SECTIONS.map((section) => ({
+    ...section,
+    items: section.items.filter((item) => item.roles.includes(r)),
+  })).filter((section) => section.items.length > 0)
 }

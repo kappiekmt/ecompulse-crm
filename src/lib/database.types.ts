@@ -251,6 +251,14 @@ export interface Database {
         read_at: string | null
         created_at: string
       }>
+      automation_settings: Tbl<{
+        key: string
+        display_name: string
+        description: string | null
+        enabled: boolean
+        updated_at: string
+        updated_by: string | null
+      }>
       api_keys: Tbl<
         {
           id: string

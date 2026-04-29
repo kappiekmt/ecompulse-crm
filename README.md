@@ -44,3 +44,42 @@ npm run dev
 ## Database
 
 See [`supabase/README.md`](./supabase/README.md). Run `supabase/migrations/0001_init.sql` in the Supabase SQL editor on first setup.
+
+## Deployment + branded webhook URLs
+
+Goal: webhooks read as `https://coaching.joinecompulse.com/api/inbound/lead` and `https://coaching.joinecompulse.com/api/webhooks/calendly` instead of raw `*.functions.supabase.co` URLs.
+
+### 1. Deploy to Vercel
+
+```bash
+npm i -g vercel
+cd ~/ecompulse-crm
+vercel --prod
+```
+
+Set environment variables in the Vercel project dashboard (or via `vercel env add`):
+
+| Var | Value |
+|---|---|
+| `VITE_SUPABASE_URL` | `https://ecdqlgigczmiilvztsno.supabase.co` |
+| `VITE_SUPABASE_ANON_KEY` | (the anon key) |
+| `VITE_PUBLIC_BASE_URL` | `https://coaching.joinecompulse.com` |
+
+### 2. Add the custom domain
+
+In Vercel → Project → Domains, add `coaching.joinecompulse.com`. Vercel shows the DNS record(s) to create at your registrar — typically a CNAME pointing to `cname.vercel-dns.com`.
+
+### 3. The rewrites are already configured
+
+`vercel.json` maps:
+
+```
+/api/inbound/lead              →  <supabase>/functions/v1/public-api/lead
+/api/inbound/payment           →  <supabase>/functions/v1/public-api/payment
+/api/webhooks/calendly         →  <supabase>/functions/v1/calendly-webhook
+/api/webhooks/stripe           →  <supabase>/functions/v1/stripe-webhook
+/api/webhooks/instagram        →  <supabase>/functions/v1/instagram-webhook
+/(everything else)             →  /index.html        (SPA fallback)
+```
+
+Once `VITE_PUBLIC_BASE_URL` is set, the Integrations page automatically shows the branded URLs in the "Your Webhook Endpoint" card and in each integration's expanded view — paste those into Calendly/Stripe/Instagram.

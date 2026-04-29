@@ -268,18 +268,46 @@ export function findIntegrationSpec(provider: string): IntegrationSpec | undefin
   return INTEGRATION_SPECS.find((s) => s.provider === provider)
 }
 
+/** Branded base URL when the SPA is hosted behind a custom domain
+ * (e.g. coaching.joinecompulse.com). Set via VITE_PUBLIC_BASE_URL. The Vercel
+ * config at /vercel.json rewrites /api/inbound/* and /api/webhooks/* to the
+ * Supabase function URLs.
+ */
+function brandedBase(): string | null {
+  const v = import.meta.env.VITE_PUBLIC_BASE_URL as string | undefined
+  return v ? v.replace(/\/$/, "") : null
+}
+
+function supabaseBase(): string | null {
+  const v = import.meta.env.VITE_SUPABASE_URL as string | undefined
+  return v ? v.replace(/\/$/, "") : null
+}
+
+/** Map a provider's edge function path to the branded `/api/webhooks/...` route. */
+const BRANDED_WEBHOOK_PATH: Record<string, string> = {
+  calendly: "/api/webhooks/calendly",
+  stripe: "/api/webhooks/stripe",
+  instagram: "/api/webhooks/instagram",
+}
+
 export function webhookUrlFor(provider: string): string | null {
   const spec = findIntegrationSpec(provider)
   if (!spec?.webhookPath) return null
-  const base = import.meta.env.VITE_SUPABASE_URL as string | undefined
+  const branded = brandedBase()
+  if (branded) {
+    return `${branded}${BRANDED_WEBHOOK_PATH[provider] ?? `/api/webhooks/${provider}`}`
+  }
+  const base = supabaseBase()
   if (!base) return null
-  return `${base.replace(/\/$/, "")}/functions/v1${spec.webhookPath}`
+  return `${base}/functions/v1${spec.webhookPath}`
 }
 
+/** The base for the public REST API (POST /lead, /payment). */
 export function publicApiBaseUrl(): string | null {
-  const base = import.meta.env.VITE_SUPABASE_URL as string | undefined
-  if (!base) return null
-  return `${base.replace(/\/$/, "")}/functions/v1/public-api`
+  const branded = brandedBase()
+  if (branded) return `${branded}/api/inbound`
+  const base = supabaseBase()
+  return base ? `${base}/functions/v1/public-api` : null
 }
 
 /** The single inbound endpoint shown in the "Your Webhook Endpoint" card. */

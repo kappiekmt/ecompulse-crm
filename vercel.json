@@ -1,0 +1,28 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "framework": "vite",
+  "rewrites": [
+    {
+      "source": "/api/inbound/:path*",
+      "destination": "https://ecdqlgigczmiilvztsno.supabase.co/functions/v1/public-api/:path*"
+    },
+    {
+      "source": "/api/webhooks/calendly",
+      "destination": "https://ecdqlgigczmiilvztsno.supabase.co/functions/v1/calendly-webhook"
+    },
+    {
+      "source": "/api/webhooks/stripe",
+      "destination": "https://ecdqlgigczmiilvztsno.supabase.co/functions/v1/stripe-webhook"
+    },
+    {
+      "source": "/api/webhooks/instagram",
+      "destination": "https://ecdqlgigczmiilvztsno.supabase.co/functions/v1/instagram-webhook"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
+  ]
+}

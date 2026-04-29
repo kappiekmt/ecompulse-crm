@@ -21,6 +21,7 @@ Open **SQL Editor → New query**, paste each file's contents, run, then move to
 1. `migrations/0001_init.sql` — core tables (team, leads, deals, students, activities, integrations log) + RLS + helpers.
 2. `migrations/0002_features.sql` — tags, conversations & messages, payments, imports, integration configs, SOPs, call outcomes, reminders, notifications + RLS + seed tags + seed integrations.
 3. `migrations/0003_storage_realtime_views.sql` — storage buckets, Realtime publication, reporting views (lead funnel, daily metrics, closer/setter performance, KPI snapshot).
+4. `migrations/0004_api_keys.sql` — public API keys table (hashed, scoped, revocable) + `verify_api_key()` SQL function used by the public API edge function.
 
 ## 3. Create the first admin user
 

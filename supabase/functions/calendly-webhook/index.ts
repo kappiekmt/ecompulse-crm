@@ -8,7 +8,7 @@
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts"
 import { corsHeaders } from "../_shared/cors.ts"
-import { adminClient, logIntegration } from "../_shared/supabase-admin.ts"
+import { adminClient, getIntegrationConfig, logIntegration } from "../_shared/supabase-admin.ts"
 
 interface CalendlyEvent {
   event: string // "invitee.created" | "invitee.canceled"
@@ -35,9 +35,12 @@ interface CalendlyEvent {
   }
 }
 
-async function verifySignature(req: Request, body: string): Promise<boolean> {
-  const signingKey = Deno.env.get("CALENDLY_SIGNING_KEY")
-  if (!signingKey) return true // dev fallback; never deploy without setting this
+async function verifySignature(
+  req: Request,
+  body: string,
+  signingKey: string | null
+): Promise<boolean> {
+  if (!signingKey) return false // never accept unsigned events in production
   const header = req.headers.get("calendly-webhook-signature")
   if (!header) return false
   const parts = Object.fromEntries(header.split(",").map((p) => p.trim().split("=")))
@@ -67,7 +70,10 @@ serve(async (req) => {
   const supabase = adminClient()
   const body = await req.text()
 
-  if (!(await verifySignature(req, body))) {
+  const config = await getIntegrationConfig(supabase, "calendly")
+  const signingKey = config?.signing_key ?? null
+
+  if (!(await verifySignature(req, body, signingKey))) {
     await logIntegration(supabase, {
       provider: "calendly",
       direction: "inbound",

@@ -27,7 +27,7 @@ create type notification_kind as enum (
 -- 2. Lead tags (Lead Tags page)
 -- ============================================================================
 create table lead_tags (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   name text not null unique,
   description text,
   color text not null default 'muted', -- maps to Badge variant
@@ -49,7 +49,7 @@ create index lead_tag_assignments_tag_idx on lead_tag_assignments(tag_id);
 -- 3. Conversations & Messages (DM Chat, IG Chat)
 -- ============================================================================
 create table conversations (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   kind conversation_kind not null,
   lead_id uuid references leads(id) on delete set null,
   external_id text,                       -- e.g. IG thread ID
@@ -76,7 +76,7 @@ create table conversation_participants (
 );
 
 create table messages (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   conversation_id uuid not null references conversations(id) on delete cascade,
   direction message_direction not null,
   sender_team_member_id uuid references team_members(id) on delete set null,
@@ -114,7 +114,7 @@ create trigger messages_bump_conversation
 -- 4. Payments ledger (Import Payments + Stripe webhook)
 -- ============================================================================
 create table payments (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   lead_id uuid references leads(id) on delete set null,
   deal_id uuid references deals(id) on delete set null,
   amount_cents integer not null check (amount_cents <> 0),
@@ -136,7 +136,7 @@ create index payments_deal_idx on payments(deal_id);
 -- 5. Imports (Import Leads + Import Payments pages)
 -- ============================================================================
 create table imports (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   kind import_kind not null,
   filename text,
   storage_path text,
@@ -154,7 +154,7 @@ create table imports (
 create index imports_kind_status_idx on imports(kind, status);
 
 create table import_rows (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   import_id uuid not null references imports(id) on delete cascade,
   row_number integer not null,
   raw jsonb not null,
@@ -171,7 +171,7 @@ create index import_rows_import_idx on import_rows(import_id, row_number);
 -- 6. Integration configs (Integrations page)
 -- ============================================================================
 create table integration_configs (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   provider text not null unique,
   is_connected boolean not null default false,
   display_name text,
@@ -194,7 +194,7 @@ create trigger integration_configs_set_updated_at
 -- 7. SOPs (Help & SOPs page)
 -- ============================================================================
 create table sops (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   category text not null,    -- 'pre_call', 'on_call', 'post_call', 'onboarding', 'coach'
   title text not null,
   body_md text not null,
@@ -217,7 +217,7 @@ create trigger sops_set_updated_at
 -- 8. Call outcomes (closer logs result of strategy call)
 -- ============================================================================
 create table call_outcomes (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   lead_id uuid not null references leads(id) on delete cascade,
   closer_id uuid references team_members(id) on delete set null,
   scheduled_for timestamptz,
@@ -236,7 +236,7 @@ create index call_outcomes_occurred_idx on call_outcomes(occurred_at desc);
 -- 9. Reminders (15-min pre-call, follow-up, payment-plan checkpoints)
 -- ============================================================================
 create table reminders (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   lead_id uuid references leads(id) on delete cascade,
   team_member_id uuid references team_members(id) on delete cascade,
   kind text not null,           -- 'pre_call_15m' | 'followup' | 'payment_plan'
@@ -254,7 +254,7 @@ create index reminders_lead_idx on reminders(lead_id);
 -- 10. Notifications (Command Center inbox)
 -- ============================================================================
 create table notifications (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   recipient_id uuid not null references team_members(id) on delete cascade,
   kind notification_kind not null,
   title text not null,

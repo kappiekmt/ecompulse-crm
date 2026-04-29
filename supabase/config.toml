@@ -1,0 +1,17 @@
+project_id = "ecompulse-crm"
+
+[api]
+enabled = true
+
+# Webhook receivers and the public REST API must accept unauthenticated calls.
+# - calendly-webhook verifies the Calendly HMAC signature inside the function.
+# - stripe-webhook verifies the Stripe signature inside the function.
+# - public-api verifies a Bearer API key inside the function.
+[functions.calendly-webhook]
+verify_jwt = false
+
+[functions.stripe-webhook]
+verify_jwt = false
+
+[functions.public-api]
+verify_jwt = false

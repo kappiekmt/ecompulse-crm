@@ -11,7 +11,7 @@ create type api_key_scope as enum (
 );
 
 create table api_keys (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   name text not null,
   prefix text not null unique,
   hashed_key text not null unique,
@@ -44,7 +44,7 @@ security definer
 set search_path = public
 as $$
 declare
-  hashed text := encode(digest(plaintext, 'sha256'), 'hex');
+  hashed text := encode(extensions.digest(plaintext, 'sha256'), 'hex');
   matched_id uuid;
 begin
   select id into matched_id

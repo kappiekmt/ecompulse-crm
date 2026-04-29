@@ -39,7 +39,7 @@ create type integration_status as enum ('pending', 'success', 'failed', 'retryin
 -- Team members — closers, setters, coaches, admins.
 -- user_id links to auth.users when the person has logged in at least once.
 create table team_members (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   user_id uuid unique references auth.users(id) on delete set null,
   full_name text not null,
   email text not null unique,
@@ -57,7 +57,7 @@ create index team_members_user_id_idx on team_members(user_id);
 
 -- Leads — the central record. Everything ties back here.
 create table leads (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   full_name text not null,
   email text,
   phone text,
@@ -84,7 +84,7 @@ create index leads_email_idx on leads(email);
 
 -- Deals — financial side of a lead. A lead can have multiple deals (downsells, renewals).
 create table deals (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   lead_id uuid not null references leads(id) on delete cascade,
   program text not null,
   amount_cents integer not null check (amount_cents >= 0),
@@ -105,7 +105,7 @@ create index deals_stripe_customer_idx on deals(stripe_customer_id);
 
 -- Students — created on Stripe payment success, holds onboarding state.
 create table students (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   lead_id uuid not null references leads(id) on delete cascade,
   deal_id uuid not null references deals(id) on delete cascade,
   coach_id uuid references team_members(id) on delete set null,
@@ -123,7 +123,7 @@ create index students_lead_id_idx on students(lead_id);
 
 -- Activities — audit log of every notable event tied to a lead/student.
 create table activities (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   lead_id uuid references leads(id) on delete cascade,
   student_id uuid references students(id) on delete cascade,
   actor_id uuid references team_members(id) on delete set null,
@@ -139,7 +139,7 @@ create index activities_created_at_idx on activities(created_at desc);
 
 -- Integration log — every webhook in and API call out, with retries and errors.
 create table integrations_log (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   provider text not null,
   direction integration_direction not null,
   event_type text not null,

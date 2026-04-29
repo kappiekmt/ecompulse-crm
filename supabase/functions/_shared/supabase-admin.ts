@@ -36,3 +36,17 @@ export async function logIntegration(
   })
   if (error) console.error("[logIntegration]", error)
 }
+
+/** Fetch the saved config JSON for a provider from integration_configs. */
+export async function getIntegrationConfig(
+  client: SupabaseClient,
+  provider: string
+): Promise<Record<string, string> | null> {
+  const { data, error } = await client
+    .from("integration_configs")
+    .select("config, is_connected")
+    .eq("provider", provider)
+    .maybeSingle()
+  if (error || !data) return null
+  return (data.config as Record<string, string>) ?? null
+}

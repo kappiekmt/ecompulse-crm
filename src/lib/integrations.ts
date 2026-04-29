@@ -226,24 +226,11 @@ export function webhookUrlFor(provider: string): string | null {
   if (!spec?.webhookPath) return null
   const base = import.meta.env.VITE_SUPABASE_URL as string | undefined
   if (!base) return null
-  // Project URL is https://<ref>.supabase.co; functions are at https://<ref>.functions.supabase.co
-  try {
-    const u = new URL(base)
-    const ref = u.hostname.split(".")[0]
-    return `https://${ref}.functions.supabase.co${spec.webhookPath}`
-  } catch {
-    return null
-  }
+  return `${base.replace(/\/$/, "")}/functions/v1${spec.webhookPath}`
 }
 
 export function publicApiBaseUrl(): string | null {
   const base = import.meta.env.VITE_SUPABASE_URL as string | undefined
   if (!base) return null
-  try {
-    const u = new URL(base)
-    const ref = u.hostname.split(".")[0]
-    return `https://${ref}.functions.supabase.co/public-api`
-  } catch {
-    return null
-  }
+  return `${base.replace(/\/$/, "")}/functions/v1/public-api`
 }

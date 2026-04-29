@@ -10,20 +10,33 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts"
 import Stripe from "https://esm.sh/stripe@14?target=deno"
 import { corsHeaders } from "../_shared/cors.ts"
-import { adminClient, logIntegration } from "../_shared/supabase-admin.ts"
-
-const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY") ?? "", {
-  apiVersion: "2024-06-20",
-  httpClient: Stripe.createFetchHttpClient(),
-})
-
-const webhookSecret = Deno.env.get("STRIPE_WEBHOOK_SECRET") ?? ""
+import { adminClient, getIntegrationConfig, logIntegration } from "../_shared/supabase-admin.ts"
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
   if (req.method !== "POST") return new Response("Method not allowed", { status: 405 })
 
   const supabase = adminClient()
+  const config = await getIntegrationConfig(supabase, "stripe")
+  const stripeSecretKey = config?.secret_key ?? ""
+  const webhookSecret = config?.webhook_secret ?? ""
+
+  if (!stripeSecretKey || !webhookSecret) {
+    await logIntegration(supabase, {
+      provider: "stripe",
+      direction: "inbound",
+      event_type: "config_missing",
+      status: "failed",
+      error: "Stripe is not connected — paste keys in Integrations.",
+    })
+    return new Response("Stripe not configured", { status: 503, headers: corsHeaders })
+  }
+
+  const stripe = new Stripe(stripeSecretKey, {
+    apiVersion: "2024-06-20",
+    httpClient: Stripe.createFetchHttpClient(),
+  })
+
   const sig = req.headers.get("stripe-signature") ?? ""
   const body = await req.text()
 

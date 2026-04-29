@@ -119,21 +119,21 @@ deal_days as (
   group by 1
 )
 select
-  d.day,
+  days.day,
   coalesce(p.cash_collected_cents, 0) as cash_collected_cents,
   coalesce(p.refunds_cents, 0) as refunds_cents,
   coalesce(b.calls_booked, 0) as calls_booked,
-  coalesce(d.order_value_cents, 0) as order_value_cents,
-  coalesce(d.wins, 0) as wins,
-  coalesce(d.losses, 0) as losses
+  coalesce(dd.order_value_cents, 0) as order_value_cents,
+  coalesce(dd.wins, 0) as wins,
+  coalesce(dd.losses, 0) as losses
 from (
   select day from payment_days
   union select day from booking_days
   union select day from deal_days
-) d
-left join payment_days p on p.day = d.day
-left join booking_days b on b.day = d.day
-left join deal_days  on  deal_days.day  = d.day;
+) days
+left join payment_days p on p.day = days.day
+left join booking_days b on b.day = days.day
+left join deal_days   dd on dd.day = days.day;
 
 -- Closer leaderboard — drives "Leaderboard — Cash Collected" and Team Performance.
 create or replace view closer_performance_v as

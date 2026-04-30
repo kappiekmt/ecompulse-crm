@@ -1,22 +1,21 @@
 // POST /eod-report
 //
-// Builds today's (Dubai TZ) end-of-day team report and posts it to the
+// Builds today's (Amsterdam TZ) end-of-day team report and posts it to the
 // configured Slack incoming webhook.
 //
-// Auth options:
-// 1. Admin-bound user JWT in Authorization header (Dashboard "Send Team EOD" button)
-// 2. service_role key in Authorization header (pg_cron scheduled call)
+// Auth & gating:
+//  - service_role token (cron path) → only sends when current Amsterdam hour
+//    is 21 AND automation_settings.daily_eod_reports is enabled.
+//  - admin user JWT (manual button) → sends immediately, no time/toggle gate.
 //
-// Body (optional):
-//   { "date": "YYYY-MM-DD" }  — override "today". Useful for backfills.
-//   { "test": true }           — prefix "TEST" so a real message isn't confused with a real EOD.
+// Optional body: { "date": "YYYY-MM-DD" } to backfill a specific day.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import { corsHeaders } from "../_shared/cors.ts"
 import { adminClient, getIntegrationConfig, logIntegration } from "../_shared/supabase-admin.ts"
 
-const DUBAI_OFFSET_HOURS = 4
+const TZ = "Europe/Amsterdam"
 
 interface CloserMetrics {
   closer_id: string
@@ -53,24 +52,64 @@ function jsonResponse(body: unknown, init: ResponseInit = {}) {
   })
 }
 
-function dubaiDayBounds(date?: string): { dateStr: string; startUtc: Date; endUtc: Date } {
-  let y: number, m: number, d: number
-  if (date) {
-    const parts = date.split("-").map((n) => parseInt(n, 10))
-    y = parts[0]
-    m = parts[1] - 1
-    d = parts[2]
-  } else {
-    const dubaiNow = new Date(Date.now() + DUBAI_OFFSET_HOURS * 3600 * 1000)
-    y = dubaiNow.getUTCFullYear()
-    m = dubaiNow.getUTCMonth()
-    d = dubaiNow.getUTCDate()
+function amsterdamNowParts() {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    weekday: "long",
+    hour12: false,
+  })
+  const parts = Object.fromEntries(
+    fmt.formatToParts(new Date()).map((p) => [p.type, p.value])
+  ) as Record<string, string>
+  return {
+    isoDate: `${parts.year}-${parts.month}-${parts.day}`,
+    hour: parseInt(parts.hour ?? "0", 10),
+    weekday: parts.weekday ?? "",
   }
-  const dubaiMidnightUtcMs = Date.UTC(y, m, d) - DUBAI_OFFSET_HOURS * 3600 * 1000
-  const startUtc = new Date(dubaiMidnightUtcMs)
-  const endUtc = new Date(dubaiMidnightUtcMs + 24 * 3600 * 1000)
-  const dateStr = `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`
-  return { dateStr, startUtc, endUtc }
+}
+
+function dayBoundsAmsterdam(dateIso: string): { startUtc: Date; endUtc: Date } {
+  // Find UTC for 00:00 in Amsterdam on dateIso. Amsterdam is UTC+1 (CET) or UTC+2 (CEST).
+  // Construct two candidates and pick the one whose Intl-formatted Amsterdam date matches.
+  const [y, m, d] = dateIso.split("-").map((n) => parseInt(n, 10))
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  })
+
+  function findMidnight(): Date {
+    // Try -2h then -1h (CEST/CET offsets) and pick the candidate that lands at 00:00 Amsterdam.
+    for (const offsetH of [2, 1]) {
+      const candidate = new Date(Date.UTC(y, m - 1, d, offsetH, 0, 0))
+      const parts = Object.fromEntries(
+        fmt.formatToParts(candidate).map((p) => [p.type, p.value])
+      ) as Record<string, string>
+      if (
+        parts.year === String(y) &&
+        parts.month === String(m).padStart(2, "0") &&
+        parts.day === String(d).padStart(2, "0") &&
+        parts.hour === "00" &&
+        parts.minute === "00"
+      ) {
+        return candidate
+      }
+    }
+    // Fallback: UTC midnight (acceptable in unusual edge cases).
+    return new Date(Date.UTC(y, m - 1, d, 0, 0, 0))
+  }
+
+  const startUtc = findMidnight()
+  const endUtc = new Date(startUtc.getTime() + 24 * 3600 * 1000)
+  return { startUtc, endUtc }
 }
 
 function eur(cents: number): string {
@@ -86,16 +125,20 @@ function pct(num: number, den: number): number {
   return Math.round((num / den) * 1000) / 10
 }
 
-async function authorize(req: Request): Promise<{ ok: true } | Response> {
+interface AuthResult {
+  ok: true
+  source: "service_role" | "user"
+}
+
+async function authorize(req: Request): Promise<AuthResult | Response> {
   const auth = req.headers.get("authorization") ?? ""
   const m = auth.match(/^Bearer\s+(.+)$/i)
   if (!m) return jsonResponse({ error: "Missing bearer token" }, { status: 401 })
   const token = m[1].trim()
 
   const serviceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")
-  if (serviceRole && token === serviceRole) return { ok: true }
+  if (serviceRole && token === serviceRole) return { ok: true, source: "service_role" }
 
-  // Otherwise must be an admin user JWT.
   const url = Deno.env.get("SUPABASE_URL")
   const anon = Deno.env.get("SUPABASE_ANON_KEY")
   if (!url || !anon) return jsonResponse({ error: "Server misconfigured" }, { status: 500 })
@@ -104,45 +147,50 @@ async function authorize(req: Request): Promise<{ ok: true } | Response> {
     global: { headers: { Authorization: `Bearer ${token}` } },
     auth: { persistSession: false, autoRefreshToken: false },
   })
-  const { data: me } = await userClient
-    .from("team_members")
-    .select("role")
-    .limit(2)
+  const { data: me } = await userClient.from("team_members").select("role").limit(2)
   if (!me?.length || me.every((r) => r.role !== "admin")) {
     return jsonResponse({ error: "Admin access required" }, { status: 403 })
   }
-  return { ok: true }
+  return { ok: true, source: "user" }
 }
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, { status: 405 })
 
-  const authResult = await authorize(req)
-  if (authResult instanceof Response) return authResult
-
+  const auth = await authorize(req)
+  if (auth instanceof Response) return auth
   const supabase = adminClient()
 
-  let body: { date?: string; test?: boolean } = {}
+  let body: { date?: string } = {}
   try {
     if (req.headers.get("content-length") && req.headers.get("content-length") !== "0") {
       body = await req.json()
     }
   } catch {
-    /* ignore parse errors, treat as empty body */
+    /* body optional */
   }
 
-  // Check feature flag.
-  const { data: setting } = await supabase
-    .from("automation_settings")
-    .select("enabled")
-    .eq("key", "daily_eod_reports")
-    .maybeSingle()
-  if (!body.test && setting && setting.enabled === false) {
-    return jsonResponse({ ok: false, skipped: "automation disabled" }, { status: 200 })
+  const ams = amsterdamNowParts()
+
+  // CRON path: only fire at 21:00 Amsterdam, and only if the toggle is on.
+  if (auth.source === "service_role") {
+    if (ams.hour !== 21) {
+      return jsonResponse({ ok: false, skipped: `not 21:00 amsterdam (got ${ams.hour}:00)` })
+    }
+    const { data: setting } = await supabase
+      .from("automation_settings")
+      .select("enabled")
+      .eq("key", "daily_eod_reports")
+      .maybeSingle()
+    if (setting && setting.enabled === false) {
+      return jsonResponse({ ok: false, skipped: "automation disabled" })
+    }
   }
 
-  // Resolve Slack webhook from integration_configs.
+  const dateStr = body.date ?? ams.isoDate
+  const { startUtc, endUtc } = dayBoundsAmsterdam(dateStr)
+
   const slackConfig = await getIntegrationConfig(supabase, "slack")
   const webhookUrl = slackConfig?.eod_webhook_url
   if (!webhookUrl) {
@@ -152,52 +200,45 @@ serve(async (req) => {
     )
   }
 
-  const { dateStr, startUtc, endUtc } = dubaiDayBounds(body.date)
+  // Pull today's data.
+  const [{ data: leadsToday }, { data: outcomesToday }, { data: paymentsToday }, { data: members }] =
+    await Promise.all([
+      supabase
+        .from("leads")
+        .select("id, closer_id, setter_id, stage")
+        .gte("created_at", startUtc.toISOString())
+        .lt("created_at", endUtc.toISOString())
+        .neq("stage", "new"),
+      supabase
+        .from("call_outcomes")
+        .select("id, closer_id, result")
+        .gte("occurred_at", startUtc.toISOString())
+        .lt("occurred_at", endUtc.toISOString()),
+      supabase
+        .from("payments")
+        .select("amount_cents, lead_id")
+        .gte("paid_at", startUtc.toISOString())
+        .lt("paid_at", endUtc.toISOString())
+        .eq("is_refund", false),
+      supabase
+        .from("team_members")
+        .select("id, full_name, role")
+        .eq("is_active", true)
+        .in("role", ["closer", "setter"]),
+    ])
 
-  // 1. Pull today's leads (i.e. things that became calls).
-  const { data: leadsToday } = await supabase
-    .from("leads")
-    .select("id, closer_id, setter_id, stage")
-    .gte("created_at", startUtc.toISOString())
-    .lt("created_at", endUtc.toISOString())
-    .neq("stage", "new")
-
-  // 2. Pull today's call outcomes.
-  const { data: outcomesToday } = await supabase
-    .from("call_outcomes")
-    .select("id, closer_id, result")
-    .gte("occurred_at", startUtc.toISOString())
-    .lt("occurred_at", endUtc.toISOString())
-
-  // 3. Pull today's payments (cash).
-  const { data: paymentsToday } = await supabase
-    .from("payments")
-    .select("amount_cents, lead_id, is_refund")
-    .gte("paid_at", startUtc.toISOString())
-    .lt("paid_at", endUtc.toISOString())
-    .eq("is_refund", false)
-
-  // 4. Pull active team members.
-  const { data: members } = await supabase
-    .from("team_members")
-    .select("id, full_name, role")
-    .eq("is_active", true)
-    .in("role", ["closer", "setter"])
-
-  // For payment-to-closer attribution, we need lead.closer_id. Pull leads referenced by today's payments.
-  const paymentLeadIds = [...new Set((paymentsToday ?? []).map((p) => p.lead_id).filter(Boolean) as string[])]
+  const paymentLeadIds = [
+    ...new Set((paymentsToday ?? []).map((p) => p.lead_id).filter(Boolean) as string[]),
+  ]
   let paymentLeadCloser = new Map<string, string | null>()
   if (paymentLeadIds.length) {
     const { data: paymentLeads } = await supabase
       .from("leads")
       .select("id, closer_id")
       .in("id", paymentLeadIds)
-    paymentLeadCloser = new Map(
-      (paymentLeads ?? []).map((l) => [l.id, l.closer_id])
-    )
+    paymentLeadCloser = new Map((paymentLeads ?? []).map((l) => [l.id, l.closer_id]))
   }
 
-  // Aggregate per-closer.
   const closers: CloserMetrics[] = (members ?? [])
     .filter((m) => m.role === "closer")
     .map((m) => {
@@ -214,7 +255,6 @@ serve(async (req) => {
       const cash_collected_cents = (paymentsToday ?? [])
         .filter((p) => p.lead_id && paymentLeadCloser.get(p.lead_id) === m.id)
         .reduce((sum, p) => sum + (p.amount_cents ?? 0), 0)
-
       return {
         closer_id: m.id,
         full_name: m.full_name,
@@ -253,15 +293,8 @@ serve(async (req) => {
   team.show_rate_pct = pct(team.calls_showed, team.calls_showed + team.calls_no_show)
   team.close_rate_pct = pct(team.deals_won, team.calls_showed)
 
-  const message = buildSlackMessage({
-    dateStr,
-    isTest: Boolean(body.test),
-    team,
-    closers,
-    setters,
-  })
+  const message = buildSlackMessage({ dateStr, weekday: ams.weekday, team, closers, setters })
 
-  // Send to Slack.
   let slackStatus: number | null = null
   let slackBody = ""
   let slackError: string | null = null
@@ -281,9 +314,9 @@ serve(async (req) => {
   await logIntegration(supabase, {
     provider: "slack",
     direction: "outbound",
-    event_type: body.test ? "eod_report.test" : "eod_report",
+    event_type: "eod_report",
     status: slackError ? "failed" : "success",
-    request_payload: { dateStr, team, closers: closers.length, setters: setters.length } as never,
+    request_payload: { dateStr, source: auth.source, team, closers: closers.length, setters: setters.length } as never,
     response_payload: { status: slackStatus, body: slackBody } as never,
     error: slackError,
   })
@@ -299,87 +332,117 @@ serve(async (req) => {
 
 function buildSlackMessage({
   dateStr,
-  isTest,
+  weekday,
   team,
   closers,
   setters,
 }: {
   dateStr: string
-  isTest: boolean
+  weekday: string
   team: TeamTotals
   closers: CloserMetrics[]
   setters: SetterMetrics[]
 }) {
-  const headerText = `${isTest ? "🧪 TEST · " : ""}📊 EOD Report — ${dateStr}`
+  // Pretty date: "Wednesday, April 30"
+  const [y, m, d] = dateStr.split("-").map((n) => parseInt(n, 10))
+  const monthName = new Date(Date.UTC(y, m - 1, d)).toLocaleString("en-US", { month: "long" })
+  const prettyDate = `${weekday}, ${monthName} ${d}`
 
-  const blocks: unknown[] = [
-    { type: "header", text: { type: "plain_text", text: headerText } },
-    {
-      type: "section",
-      fields: [
-        { type: "mrkdwn", text: `*Cash collected*\n${eur(team.cash_collected_cents)}` },
-        { type: "mrkdwn", text: `*Deals won*\n${team.deals_won}` },
-        { type: "mrkdwn", text: `*Calls booked*\n${team.calls_booked}` },
-        { type: "mrkdwn", text: `*Showed*\n${team.calls_showed} (${team.show_rate_pct}%)` },
-        { type: "mrkdwn", text: `*No-shows*\n${team.calls_no_show}` },
-        { type: "mrkdwn", text: `*Close rate*\n${team.close_rate_pct}%` },
-      ],
-    },
-    { type: "divider" },
-  ]
+  const blocks: unknown[] = []
 
-  if (closers.length === 0) {
-    blocks.push({
-      type: "section",
-      text: { type: "mrkdwn", text: "*Closers:* no active closers." },
-    })
-  } else {
-    blocks.push({
-      type: "section",
-      text: { type: "mrkdwn", text: "*Closers*" },
-    })
-    for (const c of closers) {
-      const line = `• *${c.full_name}* — ${eur(c.cash_collected_cents)} · ${c.deals_won} won · ${c.calls_showed}/${c.calls_booked} showed (${c.show_rate_pct}%) · close ${c.close_rate_pct}%`
-      blocks.push({
-        type: "section",
-        text: { type: "mrkdwn", text: line },
-      })
-    }
-  }
+  // Header.
+  blocks.push({
+    type: "header",
+    text: { type: "plain_text", text: `🌙  EOD Report  ·  ${prettyDate}`, emoji: true },
+  })
 
-  blocks.push({ type: "divider" })
-
-  if (setters.length === 0) {
-    blocks.push({
-      type: "section",
-      text: { type: "mrkdwn", text: "*Setters:* no active setters." },
-    })
-  } else {
-    blocks.push({
-      type: "section",
-      text: { type: "mrkdwn", text: "*Setters*" },
-    })
-    for (const s of setters) {
-      blocks.push({
-        type: "section",
-        text: { type: "mrkdwn", text: `• *${s.full_name}* — ${s.bookings_made} bookings` },
-      })
-    }
-  }
-
+  // Subtitle as a context block.
   blocks.push({
     type: "context",
     elements: [
+      { type: "mrkdwn", text: `*Team performance for ${dateStr}* (Amsterdam)` },
+    ],
+  })
+
+  blocks.push({ type: "divider" })
+
+  // Team KPI grid — 2x2.
+  blocks.push({
+    type: "section",
+    fields: [
+      { type: "mrkdwn", text: `💰 *Cash Collected*\n*${eur(team.cash_collected_cents)}*` },
+      { type: "mrkdwn", text: `🏆 *Deals Won*\n*${team.deals_won}*` },
+      { type: "mrkdwn", text: `📞 *Calls Booked*\n*${team.calls_booked}*` },
       {
         type: "mrkdwn",
-        text: "EcomPulse CRM · automated EOD report (Dubai 21:00)",
+        text: `✅ *Show Rate*\n*${team.show_rate_pct}%* (${team.calls_showed}/${team.calls_showed + team.calls_no_show})`,
       },
     ],
   })
 
-  // Slack also wants `text` as fallback for clients that don't support blocks.
+  // Highlight: top closer if there's anyone with cash today.
+  const topCloser = closers[0]
+  if (topCloser && topCloser.cash_collected_cents > 0) {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `🥇  *Top closer today:*  *${topCloser.full_name}*  —  ${eur(topCloser.cash_collected_cents)}  ·  ${topCloser.deals_won} won`,
+      },
+    })
+  }
+
+  blocks.push({ type: "divider" })
+
+  // Closers section.
+  if (closers.length === 0) {
+    blocks.push({
+      type: "section",
+      text: { type: "mrkdwn", text: "*👤  Closers*\n_No active closers._" },
+    })
+  } else {
+    const RANK_EMOJI = ["🥇", "🥈", "🥉"]
+    const lines = closers.map((c, i) => {
+      const rank = RANK_EMOJI[i] ?? "  •"
+      const showed = `${c.calls_showed}/${c.calls_showed + c.calls_no_show}`
+      const showRate = c.calls_showed + c.calls_no_show > 0 ? ` (${c.show_rate_pct}%)` : ""
+      return `${rank}  *${c.full_name}*  —  ${eur(c.cash_collected_cents)}  ·  ${c.deals_won} won  ·  ${showed} showed${showRate}  ·  close ${c.close_rate_pct}%`
+    })
+    blocks.push({
+      type: "section",
+      text: { type: "mrkdwn", text: `*👤  Closers*\n${lines.join("\n")}` },
+    })
+  }
+
+  blocks.push({ type: "divider" })
+
+  // Setters section.
+  if (setters.length === 0) {
+    blocks.push({
+      type: "section",
+      text: { type: "mrkdwn", text: "*📅  Setters*\n_No active setters._" },
+    })
+  } else {
+    const lines = setters.map(
+      (s) =>
+        `  •  *${s.full_name}*  —  ${s.bookings_made} booking${s.bookings_made === 1 ? "" : "s"}`
+    )
+    blocks.push({
+      type: "section",
+      text: { type: "mrkdwn", text: `*📅  Setters*\n${lines.join("\n")}` },
+    })
+  }
+
+  // Footer.
+  blocks.push({
+    type: "context",
+    elements: [
+      { type: "mrkdwn", text: `EcomPulse CRM  ·  automated EOD  ·  21:00 Amsterdam` },
+    ],
+  })
+
   return {
-    text: `EOD Report — ${dateStr}: ${eur(team.cash_collected_cents)} cash, ${team.deals_won} deals won, ${team.calls_booked} calls`,
+    text: `EOD ${prettyDate} — ${eur(team.cash_collected_cents)} · ${team.deals_won} deals · ${team.calls_booked} calls`,
     blocks,
   }
 }

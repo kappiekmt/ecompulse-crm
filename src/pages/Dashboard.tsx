@@ -46,7 +46,7 @@ export function Dashboard() {
             "Content-Type": "application/json",
             Authorization: `Bearer ${jwt}`,
           },
-          body: JSON.stringify({ test: true }),
+          body: JSON.stringify({}),
         }
       )
       const json = await res.json()

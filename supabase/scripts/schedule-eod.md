@@ -1,21 +1,32 @@
-# Scheduling the EOD Slack report
+# Scheduling the EOD Slack report (21:00 Amsterdam, DST-aware)
 
-The migration `0010_eod_schedule.sql` enables `pg_cron` and `pg_net`. The cron job itself isn't in the migration because it embeds the project's `service_role` JWT, which would leak in this public repo.
+`Europe/Amsterdam` switches between **CEST** (UTC+2, summer) and **CET** (UTC+1, winter). Since `pg_cron` requires a server restart to change `cron.timezone` (we don't have that on Supabase), we schedule **two cron jobs** — one for each offset — and let the edge function gate on the actual local hour. Net effect: exactly one send per day, automatic DST handling.
 
-To register (or rotate) the schedule, run this SQL in **Supabase Dashboard → SQL Editor**, replacing `<YOUR_SERVICE_ROLE_KEY>` with the value from **Settings → API → `service_role`**:
+The migration `0010_eod_schedule.sql` enables `pg_cron` and `pg_net`. The two cron jobs are registered separately (one-time, with a `service_role` JWT injected at runtime) so the JWT never lands in this public repo.
+
+## Register the schedule
+
+In **Supabase Dashboard → SQL Editor**, replace `<YOUR_SERVICE_ROLE_KEY>` with the value from **Settings → API → `service_role`**, then run:
 
 ```sql
--- Drop any prior schedule under the same name (no-op if absent)
-do $outer$
-begin
-  perform cron.unschedule('eod-report-daily-2100-dubai');
-exception when others then
-  null;
-end
-$outer$;
+-- Drop any prior schedule under these names (no-ops if absent)
+do $o$ begin perform cron.unschedule('eod-report-amsterdam-cest'); exception when others then null; end $o$;
+do $o$ begin perform cron.unschedule('eod-report-amsterdam-cet');  exception when others then null; end $o$;
 
--- 17:00 UTC = 21:00 Asia/Dubai (Dubai stays UTC+4 year-round, no DST)
-select cron.schedule('eod-report-daily-2100-dubai', '0 17 * * *', $cron$
+-- 21:00 Amsterdam during CEST (Apr–Oct, UTC+2) = 19:00 UTC
+select cron.schedule('eod-report-amsterdam-cest', '0 19 * * *', $cron$
+  select net.http_post(
+    url := 'https://ecdqlgigczmiilvztsno.supabase.co/functions/v1/eod-report',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'Authorization', 'Bearer <YOUR_SERVICE_ROLE_KEY>'
+    ),
+    body := '{}'::jsonb
+  ) as request_id;
+$cron$);
+
+-- 21:00 Amsterdam during CET (Nov–Mar, UTC+1) = 20:00 UTC
+select cron.schedule('eod-report-amsterdam-cet', '0 20 * * *', $cron$
   select net.http_post(
     url := 'https://ecdqlgigczmiilvztsno.supabase.co/functions/v1/eod-report',
     headers := jsonb_build_object(
@@ -27,38 +38,31 @@ select cron.schedule('eod-report-daily-2100-dubai', '0 17 * * *', $cron$
 $cron$);
 ```
 
-## Verifying the schedule
+The function checks the current Amsterdam hour: if it's not 21, the call returns `{ ok: false, skipped: "not 21:00 amsterdam" }` and Slack is never hit. So during CEST only the 19:00 UTC firing actually sends; during CET only the 20:00 UTC firing does.
+
+## Verifying
 
 ```sql
-select jobname, schedule from cron.job;
--- → eod-report-daily-2100-dubai | 0 17 * * *
+select jobname, schedule, active from cron.job order by jobname;
+-- → eod-report-amsterdam-cest | 0 19 * * * | t
+-- → eod-report-amsterdam-cet  | 0 20 * * * | t
 
--- Manually trigger once (queues an http_post in pg_net):
-select net.http_post(
-  url := 'https://ecdqlgigczmiilvztsno.supabase.co/functions/v1/eod-report',
-  headers := jsonb_build_object(
-    'Content-Type', 'application/json',
-    'Authorization', 'Bearer <YOUR_SERVICE_ROLE_KEY>'
-  ),
-  body := '{}'::jsonb
-);
-
--- Last 3 deliveries from pg_net:
-select id, status_code, left(content::text, 150) as body
-from net._http_response
-order by id desc limit 3;
-
--- Audit trail of every EOD send:
-select event_type, status, response_payload, error, created_at
+-- Last 5 outbound EOD events (cron + manual button):
+select event_type, status, response_payload, created_at
 from integrations_log
-where provider = 'slack' and event_type like 'eod_report%'
-order by created_at desc limit 10;
+where provider = 'slack' and event_type = 'eod_report'
+order by created_at desc limit 5;
+
+-- pg_net call results (from cron):
+select id, status_code, left(content::text, 120) as body, created
+from net._http_response
+order by id desc limit 5;
 ```
 
 ## Pausing without unscheduling
 
-The function checks `automation_settings.daily_eod_reports.enabled`. Toggle it off in **CRM → Integrations → Automations** to skip sends without removing the cron job. The cron still fires; the edge function just returns `{ok:false, skipped:"automation disabled"}`.
+The function checks `automation_settings.daily_eod_reports.enabled`. Toggle it off in **CRM → Integrations → Automations** to skip cron sends without removing the cron jobs. Manual button presses always send (admin override).
 
 ## Manual trigger from the Dashboard
 
-The "Send Team EOD" button on the Dashboard calls the function with `{ test: true }` so the message is prefixed `🧪 TEST · `. Useful for verifying formatting.
+The "Send Team EOD" button on the Dashboard calls the function with the admin's JWT. The function bypasses the time gate AND the toggle for manual calls — so you always see the message in Slack, regardless of hour.

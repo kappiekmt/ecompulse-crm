@@ -524,19 +524,60 @@ async function handleAppMention(event: { user: string; channel: string; text: st
     body: JSON.stringify({
       model: "claude-sonnet-4-6",
       max_tokens: 400,
+      system: [
+        "You are a sales-coaching assistant inside Slack. Output strictly in",
+        "Slack mrkdwn — *single asterisks for bold*, _underscores for italic_,",
+        "never use **double asterisks**, # or ### headers, or backticks for emphasis.",
+        "Reply with exactly three bullet lines starting with '• '. Each bullet is",
+        "one sentence, max ~25 words. The three bullets cover, in order:",
+        "1) *Who:* who the lead is in one line.",
+        "2) *Status:* where they are in the pipeline + most recent signal.",
+        "3) *Next:* the single best next action with concrete timing.",
+        "No preamble, no closing, no headers — just the three bullets.",
+      ].join(" "),
       messages: [{
         role: "user",
-        content: `You are a sales-coaching assistant. Summarize this CRM lead in 3 short bullets focused on: who they are, where they are in the pipeline, and the next best action.\n\nLead: ${JSON.stringify(lead)}\n\nRecent activities: ${JSON.stringify(activities ?? [])}`,
+        content: `Lead: ${JSON.stringify(lead)}\n\nRecent activities: ${JSON.stringify(activities ?? [])}`,
       }],
     }),
   })
   const j = await r.json() as { content?: { text: string }[] }
-  const summary = j.content?.[0]?.text ?? "(no summary returned)"
+  let summary = j.content?.[0]?.text ?? "(no summary returned)"
+
+  // Defensive: convert any standard markdown the model may have slipped in.
+  summary = summary
+    .replace(/\*\*(.+?)\*\*/g, "*$1*")          // **bold** -> *bold*
+    .replace(/^#{1,6}\s+/gm, "")                 // strip headers
+    .replace(/^\s*[-*]\s+/gm, "• ")              // - or * bullets -> •
+    .trim()
 
   await postMessage({
     channel: event.channel,
     thread_ts: event.ts,
-    text: `*${lead.full_name ?? "(no name)"}* — ${lead.email}\n${summary}\n<${PUBLIC_APP_URL}/leads?id=${lead.id}|Open in CRM>`,
+    blocks: [
+      {
+        type: "header",
+        text: { type: "plain_text", text: `${lead.full_name ?? "(no name)"} — Lead summary` },
+      },
+      {
+        type: "context",
+        elements: [{
+          type: "mrkdwn",
+          text: `${lead.email ?? "—"} · stage \`${lead.stage}\``,
+        }],
+      },
+      { type: "section", text: { type: "mrkdwn", text: summary } },
+      {
+        type: "actions",
+        elements: [{
+          type: "button",
+          text: { type: "plain_text", text: "Open in CRM" },
+          url: `${PUBLIC_APP_URL}/leads?id=${lead.id}`,
+          style: "primary",
+        }],
+      },
+    ],
+    text: `${lead.full_name ?? "(no name)"} — Lead summary`,
   })
 }
 

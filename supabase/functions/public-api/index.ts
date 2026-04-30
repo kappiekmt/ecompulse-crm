@@ -11,6 +11,7 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts"
 import { corsHeaders } from "../_shared/cors.ts"
 import { adminClient, logIntegration } from "../_shared/supabase-admin.ts"
+import { dispatchEvent } from "../_shared/dispatch.ts"
 
 interface LeadPayload {
   full_name: string
@@ -175,6 +176,28 @@ serve(async (req) => {
       related_lead_id: lead.id,
     })
 
+    await dispatchEvent(supabase, {
+      event_type: "lead.created",
+      data: {
+        lead: {
+          id: lead.id,
+          full_name: body.full_name,
+          email: body.email ?? null,
+          phone: body.phone ?? null,
+          instagram: body.instagram ?? null,
+          stage: "new",
+          source: "public_api",
+          tags: body.tags ?? [],
+          utm_source: body.utm_source ?? null,
+          utm_medium: body.utm_medium ?? null,
+          utm_campaign: body.utm_campaign ?? null,
+          utm_content: body.utm_content ?? null,
+          utm_term: body.utm_term ?? null,
+          notes: body.notes ?? null,
+        },
+      },
+    })
+
     return jsonResponse({ ok: true, lead_id: lead.id }, { status: 201 })
   }
 
@@ -217,6 +240,20 @@ serve(async (req) => {
     if (error) {
       return jsonResponse({ error: error.message }, { status: 500 })
     }
+
+    await dispatchEvent(supabase, {
+      event_type: "payment.received",
+      data: {
+        payment: {
+          id: payment?.id,
+          lead_id: lead?.id ?? null,
+          amount_cents: body.amount_cents,
+          currency: body.currency ?? "EUR",
+          paid_at: body.paid_at ?? new Date().toISOString(),
+          source: "public_api",
+        },
+      },
+    })
 
     return jsonResponse({ ok: true, payment_id: payment?.id }, { status: 201 })
   }

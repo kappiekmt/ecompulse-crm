@@ -251,6 +251,58 @@ export interface Database {
         read_at: string | null
         created_at: string
       }>
+      webhook_subscriptions: Tbl<
+        {
+          id: string
+          name: string
+          target_url: string
+          event_types: string[]
+          signing_secret: string | null
+          is_active: boolean
+          description: string | null
+          created_by: string | null
+          created_at: string
+          updated_at: string
+          last_delivered_at: string | null
+          last_status: "success" | "failed" | null
+        },
+        {
+          name: string
+          target_url: string
+          event_types: string[]
+          signing_secret?: string | null
+          is_active?: boolean
+          description?: string | null
+        }
+      >
+      webhook_deliveries: Tbl<
+        {
+          id: string
+          subscription_id: string
+          event_type: string
+          event_id: string
+          payload: Json
+          status: "pending" | "success" | "failed"
+          attempts: number
+          response_status: number | null
+          response_body_preview: string | null
+          error: string | null
+          created_at: string
+          delivered_at: string | null
+        },
+        {
+          subscription_id: string
+          event_type: string
+          event_id: string
+          payload: Json
+          status: "pending" | "success" | "failed"
+          attempts?: number
+          response_status?: number | null
+          response_body_preview?: string | null
+          error?: string | null
+          delivered_at?: string | null
+        }
+      >
       automation_settings: Tbl<{
         key: string
         display_name: string

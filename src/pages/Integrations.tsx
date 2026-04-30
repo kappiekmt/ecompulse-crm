@@ -4,6 +4,7 @@ import { WebhookEndpointCard } from "@/components/integrations/WebhookEndpointCa
 import { AutomationsCard } from "@/components/integrations/AutomationsCard"
 import { IntegrationCardItem } from "@/components/integrations/IntegrationCardItem"
 import { ApiKeysPanel } from "@/components/integrations/ApiKeysPanel"
+import { WebhookSubscriptionsPanel } from "@/components/integrations/WebhookSubscriptionsPanel"
 import { INTEGRATION_SPECS } from "@/lib/integrations"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 
@@ -39,6 +40,7 @@ export function Integrations() {
       />
       <div className="flex flex-col gap-5 p-8">
         <WebhookEndpointCard />
+        <WebhookSubscriptionsPanel />
         <AutomationsCard />
 
         <div className="flex flex-col gap-3">

@@ -11,6 +11,7 @@ import { serve } from "https://deno.land/std@0.224.0/http/server.ts"
 import Stripe from "https://esm.sh/stripe@14?target=deno"
 import { corsHeaders } from "../_shared/cors.ts"
 import { adminClient, getIntegrationConfig, logIntegration } from "../_shared/supabase-admin.ts"
+import { dispatchEvent } from "../_shared/dispatch.ts"
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
@@ -123,6 +124,28 @@ serve(async (req) => {
           request_payload: event as never,
           related_lead_id: leadId,
         })
+
+        await dispatchEvent(supabase, {
+          event_type: "payment.received",
+          data: {
+            lead_id: leadId,
+            email: session.customer_details?.email ?? null,
+            amount_cents: amount,
+            currency,
+            source: "stripe",
+            stripe_session_id: session.id,
+            stripe_customer_id: customerId,
+          },
+        })
+        await dispatchEvent(supabase, {
+          event_type: "deal.won",
+          data: {
+            lead_id: leadId,
+            program: (session.metadata?.program as string | undefined) ?? "default",
+            amount_cents: amount,
+            currency,
+          },
+        })
         break
       }
 
@@ -150,6 +173,16 @@ serve(async (req) => {
           event_type: event.type,
           status: "success",
           request_payload: event as never,
+        })
+
+        await dispatchEvent(supabase, {
+          event_type: "payment.refunded",
+          data: {
+            stripe_charge_id: charge.id,
+            stripe_payment_intent_id: piId,
+            amount_refunded_cents: charge.amount_refunded ?? 0,
+            currency: charge.currency.toUpperCase(),
+          },
         })
         break
       }

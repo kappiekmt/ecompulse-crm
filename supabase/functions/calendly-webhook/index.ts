@@ -9,6 +9,7 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts"
 import { corsHeaders } from "../_shared/cors.ts"
 import { adminClient, getIntegrationConfig, logIntegration } from "../_shared/supabase-admin.ts"
+import { dispatchEvent } from "../_shared/dispatch.ts"
 
 interface CalendlyEvent {
   event: string // "invitee.created" | "invitee.canceled"
@@ -166,6 +167,30 @@ serve(async (req) => {
       related_lead_id: lead.id,
     })
 
+    await dispatchEvent(supabase, {
+      event_type: "call.booked",
+      data: {
+        lead: {
+          id: lead.id,
+          full_name: p.name ?? null,
+          email: p.email ?? null,
+          timezone: p.timezone ?? null,
+        },
+        booking: {
+          scheduled_for: scheduledFor,
+          closer_email: closerEmail,
+          closer_id: closerId,
+        },
+        attribution: {
+          utm_source: utm.utm_source ?? null,
+          utm_medium: utm.utm_medium ?? null,
+          utm_campaign: utm.utm_campaign ?? null,
+          utm_content: utm.utm_content ?? null,
+          utm_term: utm.utm_term ?? null,
+        },
+      },
+    })
+
     return new Response(JSON.stringify({ ok: true, lead_id: lead.id }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     })
@@ -198,6 +223,15 @@ serve(async (req) => {
       status: "success",
       request_payload: evt,
     })
+
+    await dispatchEvent(supabase, {
+      event_type: "call.cancelled",
+      data: {
+        lead: { email: p.email ?? null, full_name: p.name ?? null },
+        cancel_url: p.cancel_url ?? null,
+      },
+    })
+
     return new Response("ok", { headers: corsHeaders })
   }
 

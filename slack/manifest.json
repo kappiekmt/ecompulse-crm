@@ -30,6 +30,13 @@
         "description": "Check a student's onboarding + tier",
         "usage_hint": "<name or email>",
         "should_escape": false
+      },
+      {
+        "command": "/onboard-discord",
+        "url": "https://coaching.joinecompulse.com/api/slack/commands",
+        "description": "Assign tier role + create 1-on-1 channel for a paying student",
+        "usage_hint": "<email or name> <discord-user-id>",
+        "should_escape": false
       }
     ]
   },

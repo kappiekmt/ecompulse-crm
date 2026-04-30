@@ -23,6 +23,12 @@ const CRM_WEBHOOK_SECRET = Deno.env.get("CRM_WEBHOOK_SECRET") ?? ""
 const CHANNEL_WINS = Deno.env.get("SLACK_CHANNEL_WINS") ?? "#wins"
 const CHANNEL_FINANCE = Deno.env.get("SLACK_CHANNEL_FINANCE") ?? "#finance-alerts"
 
+const DISCORD_BOT_TOKEN = Deno.env.get("DISCORD_BOT_TOKEN") ?? ""
+const DISCORD_GUILD_ID = Deno.env.get("DISCORD_GUILD_ID") ?? ""
+const DISCORD_ONE_ON_ONE_CATEGORY = Deno.env.get("DISCORD_ONE_ON_ONE_CATEGORY") ?? "1-on-1 Coaching"
+
+const DISCORD_API = "https://discord.com/api/v10"
+
 // ---------- Supabase admin ----------
 
 function adminClient(): SupabaseClient {
@@ -469,6 +475,7 @@ async function handleSlashCommand(form: SlashPayload): Promise<Response> {
       case "/lead": return await handleLead(form)
       case "/note": return await handleNote(form)
       case "/student-status": return await handleStudentStatus(form)
+      case "/onboard-discord": return await handleOnboardDiscord(form)
       default: return ephemeral(`Unknown command \`${form.command}\``)
     }
   } catch (err) {
@@ -612,6 +619,11 @@ interface CrmEvent {
   data: Record<string, unknown>
 }
 
+async function openDM(slackUserId: string): Promise<string | null> {
+  const r = await slackApi<{ channel: { id: string } }>("conversations.open", { users: slackUserId })
+  return r.ok && r.channel ? r.channel.id : null
+}
+
 async function handlePaymentReceived(data: Record<string, unknown>) {
   const supabase = adminClient()
   const leadId = data.lead_id as string | null
@@ -622,12 +634,13 @@ async function handlePaymentReceived(data: Record<string, unknown>) {
   let leadEmail = (data.email as string | null) ?? null
   let coachingTier: string | null = null
   let closer: string | null = null
+  let closerSlackId: string | null = null
 
   if (leadId) {
     const [leadRes, dealRes] = await Promise.all([
       supabase
         .from("leads")
-        .select("full_name, email, closer:team_members!leads_closer_id_fkey(full_name)")
+        .select("full_name, email, closer:team_members!leads_closer_id_fkey(full_name, slack_user_id)")
         .eq("id", leadId)
         .maybeSingle(),
       supabase
@@ -641,8 +654,9 @@ async function handlePaymentReceived(data: Record<string, unknown>) {
     if (leadRes.data) {
       leadName = (leadRes.data.full_name as string) ?? leadName
       leadEmail = (leadRes.data.email as string) ?? leadEmail
-      const c = leadRes.data.closer as { full_name?: string } | null
+      const c = leadRes.data.closer as { full_name?: string; slack_user_id?: string } | null
       closer = c?.full_name ?? null
+      closerSlackId = c?.slack_user_id ?? null
     }
     if (dealRes.data) {
       coachingTier = (dealRes.data.coaching_tier as string) ?? null
@@ -677,6 +691,21 @@ async function handlePaymentReceived(data: Record<string, unknown>) {
       } : null,
     ].filter(Boolean) as unknown[],
   })
+
+  // DM the closer with the next-step nudge so they collect Discord ID.
+  if (closerSlackId) {
+    const dmChannel = await openDM(closerSlackId)
+    if (dmChannel) {
+      const tierLabel = coachingTier ? ` (\`${coachingTier}\`)` : ""
+      const onboardCmd = leadEmail
+        ? `\`/onboard-discord ${leadEmail} <discord-user-id>\``
+        : `\`/onboard-discord ${leadName} <discord-user-id>\``
+      await postMessage({
+        channel: dmChannel,
+        text: `🎉 ${leadName} just paid ${fmtMoney(amountCents, currency)}${tierLabel}.\n\nNext step: get their Discord user ID and run ${onboardCmd}.\n_(In Discord: User Settings → Advanced → Developer Mode on, then right-click the user → Copy User ID.)_`,
+      })
+    }
+  }
 }
 
 async function handlePaymentRefunded(data: Record<string, unknown>) {
@@ -782,6 +811,222 @@ async function handleEventsPayload(payload: {
     queueMicrotask(() => handleAppMention(payload.event!).catch((e) => console.error(e)))
   }
   return new Response("", { status: 200 })
+}
+
+// ---------- Discord ----------
+
+interface DiscordResult<T = unknown> { ok: boolean; data: T | null; error: string | null }
+
+async function discordApi<T = unknown>(
+  method: string,
+  path: string,
+  body?: Record<string, unknown>,
+): Promise<DiscordResult<T>> {
+  if (!DISCORD_BOT_TOKEN) return { ok: false, data: null, error: "DISCORD_BOT_TOKEN not set" }
+  try {
+    const res = await fetch(`${DISCORD_API}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bot ${DISCORD_BOT_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    })
+    const text = await res.text()
+    if (res.status === 204 || !text) return { ok: res.ok, data: null, error: res.ok ? null : text }
+    const json = JSON.parse(text) as T
+    if (!res.ok) {
+      return { ok: false, data: null, error: `Discord ${res.status}: ${text.slice(0, 300)}` }
+    }
+    return { ok: true, data: json, error: null }
+  } catch (err) {
+    return { ok: false, data: null, error: (err as Error).message }
+  }
+}
+
+interface DiscordRole { id: string; name: string }
+interface DiscordChannel { id: string; name: string; type: number; parent_id?: string | null }
+
+const ROLE_NAMES: Record<string, string> = {
+  fundament: "fundament-student",
+  groepscoaching: "groep-student",
+  one_on_one: "1on1-student",
+}
+
+async function ensureRole(name: string, color = 0x5865f2): Promise<string | null> {
+  const list = await discordApi<DiscordRole[]>("GET", `/guilds/${DISCORD_GUILD_ID}/roles`)
+  if (list.ok && list.data) {
+    const existing = list.data.find((r) => r.name === name)
+    if (existing) return existing.id
+  }
+  const created = await discordApi<DiscordRole>("POST", `/guilds/${DISCORD_GUILD_ID}/roles`, {
+    name,
+    color,
+    mentionable: true,
+    hoist: true,
+  })
+  return created.data?.id ?? null
+}
+
+async function assignRole(userId: string, roleId: string): Promise<boolean> {
+  const res = await discordApi(
+    "PUT",
+    `/guilds/${DISCORD_GUILD_ID}/members/${userId}/roles/${roleId}`,
+  )
+  return res.ok
+}
+
+async function ensureCategory(name: string): Promise<string | null> {
+  const list = await discordApi<DiscordChannel[]>("GET", `/guilds/${DISCORD_GUILD_ID}/channels`)
+  if (list.ok && list.data) {
+    const existing = list.data.find((c) => c.type === 4 && c.name === name)
+    if (existing) return existing.id
+  }
+  const created = await discordApi<DiscordChannel>("POST", `/guilds/${DISCORD_GUILD_ID}/channels`, {
+    name,
+    type: 4,                                       // GUILD_CATEGORY
+    permission_overwrites: [
+      { id: DISCORD_GUILD_ID, type: 0, deny: "1024" }, // @everyone deny VIEW_CHANNEL
+    ],
+  })
+  return created.data?.id ?? null
+}
+
+async function createPrivateChannel(args: {
+  name: string
+  parentId: string
+  studentDiscordId: string
+  coachDiscordId?: string | null
+}): Promise<string | null> {
+  // VIEW_CHANNEL=1024, SEND_MESSAGES=2048, READ_MESSAGE_HISTORY=65536
+  const allowAll = String(1024 | 2048 | 65536)
+  const overwrites: { id: string; type: number; allow?: string; deny?: string }[] = [
+    { id: DISCORD_GUILD_ID, type: 0, deny: "1024" },                    // @everyone deny view
+    { id: args.studentDiscordId, type: 1, allow: allowAll },
+  ]
+  if (args.coachDiscordId) {
+    overwrites.push({ id: args.coachDiscordId, type: 1, allow: allowAll })
+  }
+  const created = await discordApi<DiscordChannel>("POST", `/guilds/${DISCORD_GUILD_ID}/channels`, {
+    name: args.name,
+    type: 0,                                       // GUILD_TEXT
+    parent_id: args.parentId,
+    permission_overwrites: overwrites,
+  })
+  return created.data?.id ?? null
+}
+
+function discordChannelName(fullName: string | null | undefined): string {
+  const first = (fullName ?? "").trim().split(/\s+/)[0] ?? "student"
+  return first.toLowerCase().replace(/[^a-z0-9]/g, "") || "student"
+}
+
+// ---------- /onboard-discord slash command ----------
+
+async function handleOnboardDiscord(p: SlashPayload): Promise<Response> {
+  if (!DISCORD_BOT_TOKEN || !DISCORD_GUILD_ID) {
+    return ephemeral("Discord is not configured. Set `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID` in Supabase secrets.")
+  }
+  const parts = p.text.trim().split(/\s+/)
+  if (parts.length < 2) {
+    return ephemeral("Usage: `/onboard-discord <email or name> <discord-user-id>`")
+  }
+  const discordUserId = parts[parts.length - 1]
+  const target = parts.slice(0, -1).join(" ")
+
+  if (!/^\d{15,21}$/.test(discordUserId)) {
+    return ephemeral(`\`${discordUserId}\` doesn't look like a Discord user ID. Right-click the user in Discord (with developer mode on) → Copy User ID.`)
+  }
+
+  const supabase = adminClient()
+
+  const { data: lead } = await supabase
+    .from("leads")
+    .select("id, full_name, email")
+    .or(`email.ilike.%${target}%,full_name.ilike.%${target}%`)
+    .limit(1)
+    .maybeSingle()
+
+  if (!lead) return ephemeral(`No lead matched \`${target}\`.`)
+
+  const { data: deal } = await supabase
+    .from("deals")
+    .select("coaching_tier, program")
+    .eq("lead_id", lead.id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  const tier = (deal?.coaching_tier as string | null) ?? null
+  if (!tier) {
+    return ephemeral(`Lead *${lead.full_name}* has no won deal with a coaching tier yet — Discord onboarding waits on a paid deal.`)
+  }
+
+  // Upsert student row with the Discord ID.
+  const { data: existingStudent } = await supabase
+    .from("students")
+    .select("id, coach:team_members(full_name)")
+    .eq("lead_id", lead.id)
+    .maybeSingle()
+
+  let studentId = existingStudent?.id as string | undefined
+  if (studentId) {
+    await supabase.from("students").update({
+      discord_user_id: discordUserId,
+      coaching_tier: tier,
+    }).eq("id", studentId)
+  } else {
+    const inserted = await supabase.from("students").insert({
+      lead_id: lead.id,
+      deal_id: null,
+      program: deal?.program ?? "default",
+      coaching_tier: tier,
+      discord_user_id: discordUserId,
+      onboarding_status: "in_progress",
+    }).select("id").single()
+    studentId = inserted.data?.id
+  }
+
+  // Ensure roles exist + assign the tier role.
+  const roleName = ROLE_NAMES[tier] ?? `${tier}-student`
+  const roleId = await ensureRole(roleName)
+  if (!roleId) {
+    return ephemeral(`Failed to create or look up role \`${roleName}\` in Discord. Check the bot has Manage Roles permission.`)
+  }
+  const roleAssigned = await assignRole(discordUserId, roleId)
+  if (!roleAssigned) {
+    return ephemeral(`Couldn't assign role to <@${discordUserId}>. Make sure they're in the Discord server and the bot's role is *above* the \`${roleName}\` role in the role list.`)
+  }
+
+  let privateChannelLine = ""
+  if (tier === "one_on_one") {
+    const categoryId = await ensureCategory(DISCORD_ONE_ON_ONE_CATEGORY)
+    if (!categoryId) {
+      privateChannelLine = `\n⚠️ Couldn't create the *${DISCORD_ONE_ON_ONE_CATEGORY}* category — check Manage Channels permission.`
+    } else {
+      const channelName = `${discordChannelName(lead.full_name as string)}-coaching`
+      const channelId = await createPrivateChannel({
+        name: channelName,
+        parentId: categoryId,
+        studentDiscordId: discordUserId,
+      })
+      privateChannelLine = channelId
+        ? `\n🔒 Private channel <#${channelId}> created in *${DISCORD_ONE_ON_ONE_CATEGORY}*.`
+        : `\n⚠️ Couldn't create the private channel.`
+    }
+  }
+
+  await supabase.from("activities").insert({
+    lead_id: lead.id,
+    student_id: studentId ?? null,
+    type: "discord.onboarded",
+    payload: { discord_user_id: discordUserId, tier, role: roleName, by_slack_user: p.user_id } as never,
+  })
+
+  return ephemeral(
+    `✅ *${lead.full_name}* onboarded to Discord — assigned role \`${roleName}\`.${privateChannelLine}\n` +
+    (tier === "one_on_one" ? "Coach DM with lead context will fire once a coach is assigned to the student." : ""),
+  )
 }
 
 // ---------- Router ----------

@@ -923,22 +923,44 @@ function discordChannelName(fullName: string | null | undefined): string {
 
 // ---------- /onboard-discord slash command ----------
 
-async function handleOnboardDiscord(p: SlashPayload): Promise<Response> {
-  if (!DISCORD_BOT_TOKEN || !DISCORD_GUILD_ID) {
-    return ephemeral("Discord is not configured. Set `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID` in Supabase secrets.")
-  }
-  const parts = p.text.trim().split(/\s+/)
-  if (parts.length < 2) {
-    return ephemeral("Usage: `/onboard-discord <email or name> <discord-user-id>`")
-  }
-  const discordUserId = parts[parts.length - 1]
-  const target = parts.slice(0, -1).join(" ")
+async function postToResponseUrl(responseUrl: string, body: Record<string, unknown>) {
+  await fetch(responseUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).catch((e) => console.warn("[slack-app] response_url post failed", e))
+}
 
-  if (!/^\d{15,21}$/.test(discordUserId)) {
-    return ephemeral(`\`${discordUserId}\` doesn't look like a Discord user ID. Right-click the user in Discord (with developer mode on) → Copy User ID.`)
+async function runOnboardDiscord(args: {
+  responseUrl: string
+  target: string
+  discordUserId: string
+  bySlackUserId: string
+}): Promise<void> {
+  try {
+    const result = await onboardDiscordImpl(args)
+    await postToResponseUrl(args.responseUrl, {
+      response_type: "ephemeral",
+      replace_original: true,
+      ...result,
+    })
+  } catch (err) {
+    console.error("[slack-app] onboard-discord failed", err)
+    await postToResponseUrl(args.responseUrl, {
+      response_type: "ephemeral",
+      replace_original: true,
+      text: `❌ Onboarding failed: ${(err as Error).message}`,
+    })
   }
+}
 
+async function onboardDiscordImpl(args: {
+  target: string
+  discordUserId: string
+  bySlackUserId: string
+}): Promise<{ text?: string; blocks?: unknown[] }> {
   const supabase = adminClient()
+  const { target, discordUserId } = args
 
   const { data: lead } = await supabase
     .from("leads")
@@ -947,7 +969,7 @@ async function handleOnboardDiscord(p: SlashPayload): Promise<Response> {
     .limit(1)
     .maybeSingle()
 
-  if (!lead) return ephemeral(`No lead matched \`${target}\`.`)
+  if (!lead) return { text: `No lead matched \`${target}\`.` }
 
   const { data: deal } = await supabase
     .from("deals")
@@ -959,13 +981,12 @@ async function handleOnboardDiscord(p: SlashPayload): Promise<Response> {
 
   const tier = (deal?.coaching_tier as string | null) ?? null
   if (!tier) {
-    return ephemeral(`Lead *${lead.full_name}* has no won deal with a coaching tier yet — Discord onboarding waits on a paid deal.`)
+    return { text: `Lead *${lead.full_name}* has no won deal with a coaching tier yet — Discord onboarding waits on a paid deal.` }
   }
 
-  // Upsert student row with the Discord ID.
   const { data: existingStudent } = await supabase
     .from("students")
-    .select("id, coach:team_members(full_name)")
+    .select("id")
     .eq("lead_id", lead.id)
     .maybeSingle()
 
@@ -987,15 +1008,14 @@ async function handleOnboardDiscord(p: SlashPayload): Promise<Response> {
     studentId = inserted.data?.id
   }
 
-  // Ensure roles exist + assign the tier role.
   const roleName = ROLE_NAMES[tier] ?? `${tier}-student`
   const roleId = await ensureRole(roleName)
   if (!roleId) {
-    return ephemeral(`Failed to create or look up role \`${roleName}\` in Discord. Check the bot has Manage Roles permission.`)
+    return { text: `Failed to create or look up role \`${roleName}\`. Check the bot has Manage Roles permission and is in the server.` }
   }
   const roleAssigned = await assignRole(discordUserId, roleId)
   if (!roleAssigned) {
-    return ephemeral(`Couldn't assign role to <@${discordUserId}>. Make sure they're in the Discord server and the bot's role is *above* the \`${roleName}\` role in the role list.`)
+    return { text: `Couldn't assign role to <@${discordUserId}>. Make sure they're in the Discord server and the bot's role is *above* the \`${roleName}\` role.` }
   }
 
   let privateChannelLine = ""
@@ -1020,13 +1040,42 @@ async function handleOnboardDiscord(p: SlashPayload): Promise<Response> {
     lead_id: lead.id,
     student_id: studentId ?? null,
     type: "discord.onboarded",
-    payload: { discord_user_id: discordUserId, tier, role: roleName, by_slack_user: p.user_id } as never,
+    payload: { discord_user_id: discordUserId, tier, role: roleName, by_slack_user: args.bySlackUserId } as never,
   })
 
-  return ephemeral(
-    `✅ *${lead.full_name}* onboarded to Discord — assigned role \`${roleName}\`.${privateChannelLine}\n` +
-    (tier === "one_on_one" ? "Coach DM with lead context will fire once a coach is assigned to the student." : ""),
+  return {
+    text:
+      `✅ *${lead.full_name}* onboarded to Discord — assigned role \`${roleName}\`.${privateChannelLine}` +
+      (tier === "one_on_one" ? "\nCoach DM with lead context will fire once a coach is assigned to the student." : ""),
+  }
+}
+
+async function handleOnboardDiscord(p: SlashPayload): Promise<Response> {
+  if (!DISCORD_BOT_TOKEN || !DISCORD_GUILD_ID) {
+    return ephemeral("Discord is not configured. Set `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID` in Supabase secrets.")
+  }
+  const parts = p.text.trim().split(/\s+/)
+  if (parts.length < 2) {
+    return ephemeral("Usage: `/onboard-discord <email or name> <discord-user-id>`")
+  }
+  const discordUserId = parts[parts.length - 1]
+  const target = parts.slice(0, -1).join(" ")
+
+  if (!/^\d{15,21}$/.test(discordUserId)) {
+    return ephemeral(`\`${discordUserId}\` doesn't look like a Discord user ID. Right-click the user (developer mode on) → Copy User ID.`)
+  }
+
+  // Ack within 3s; do the slow Discord work async and post results to response_url.
+  queueMicrotask(() =>
+    runOnboardDiscord({
+      responseUrl: p.response_url,
+      target,
+      discordUserId,
+      bySlackUserId: p.user_id,
+    }).catch((e) => console.error("[slack-app] onboard runner error", e)),
   )
+
+  return ephemeral(`⏳ Onboarding *${target}* — assigning role and (if 1-on-1) creating their private channel…`)
 }
 
 // ---------- Router ----------

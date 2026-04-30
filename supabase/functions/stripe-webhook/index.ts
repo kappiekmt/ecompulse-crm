@@ -115,10 +115,11 @@ serve(async (req) => {
           "default"
 
         if (leadId) {
-          await supabase
-            .from("leads")
-            .update({ stage: "won" })
-            .eq("id", leadId)
+          // Lead → won. Also sync intended_tier to the resolved tier so the
+          // lead badge shows what they actually bought, not what was pitched.
+          const leadPatch: Record<string, unknown> = { stage: "won" }
+          if (tier?.key) leadPatch.intended_tier = tier.key
+          await supabase.from("leads").update(leadPatch).eq("id", leadId)
 
           const { data: deal } = await supabase
             .from("deals")

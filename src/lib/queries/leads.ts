@@ -347,8 +347,11 @@ export function useAddPayment() {
       })
       if (payErr) throw payErr
 
-      // 4. Lead → won.
-      await supabase.from("leads").update({ stage: "won" }).eq("id", input.leadId)
+      // 4. Lead → won. Also sync intended_tier to the resolved tier so the
+      //    lead badge shows what they actually bought, not what was pitched.
+      const leadPatch: { stage: "won"; intended_tier?: string } = { stage: "won" }
+      if (tier?.key) leadPatch.intended_tier = tier.key
+      await supabase.from("leads").update(leadPatch).eq("id", input.leadId)
 
       // 5. Student row — find or create, auto-assign coach.
       if (dealId) {

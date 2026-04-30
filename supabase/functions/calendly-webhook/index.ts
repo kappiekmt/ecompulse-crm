@@ -139,11 +139,15 @@ serve(async (req) => {
     let closerSlackId: string | null = null
     let closerTimezone: string | null = null
     if (closerEmail) {
+      // Match any active team_member by email — closer OR admin (founder doing
+      // their own calls). Setters/coaches are filtered out because they don't
+      // run sales calls.
       const { data } = await supabase
         .from("team_members")
-        .select("id, full_name, slack_user_id, timezone")
+        .select("id, full_name, slack_user_id, timezone, role")
         .eq("email", closerEmail)
-        .eq("role", "closer")
+        .eq("is_active", true)
+        .in("role", ["closer", "admin"])
         .maybeSingle()
       closerId = data?.id ?? null
       closerFullName = data?.full_name ?? null
@@ -430,18 +434,21 @@ async function maybePostBookingSlack(
   })
 }
 
-function buildCreatedMessage(args: BookingSlackArgs, _closerLine: string, _scheduledLine: string) {
+function buildCreatedMessage(args: BookingSlackArgs, closerLine: string, _scheduledLine: string) {
   const firstName = args.lead.full_name.split(" ")[0] || args.lead.full_name
   const whenLine = formatShortLocalTime(args.scheduledFor, args.closerTimezone)
   const sourceLine = formatAttribution(args.attribution) || "—"
   const phoneFmt = args.lead.phone ? formatPhone(args.lead.phone) : "—"
 
-  // 2x2 fields — When/Email, Phone/Source.
+  // closerLine is built upstream: <@U07…> when Slack ID is set, *Bold Name*
+  // otherwise, "_Unassigned_" if no closer matched the Calendly host email.
+  // 2x2 fields — When/Closer, Email/Phone. Source moved to the Attribution
+  // context block at the bottom (was redundant with it).
   const fields = [
     { type: "mrkdwn", text: `*When:*\n${whenLine}` },
+    { type: "mrkdwn", text: `*Closer:*\n${closerLine}` },
     { type: "mrkdwn", text: `*Email:*\n${args.lead.email ?? "—"}` },
     { type: "mrkdwn", text: `*Phone:*\n${phoneFmt}` },
-    { type: "mrkdwn", text: `*Source:*\n${sourceLine}` },
   ]
 
   // Action buttons row.

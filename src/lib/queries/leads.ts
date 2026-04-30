@@ -298,9 +298,12 @@ export function useAddPayment() {
         .select("intended_tier")
         .eq("id", input.leadId)
         .single()
+      // Amount paid wins over the closer's pitched tier — if pitched 1-1
+      // but only €2,497 came in, that's Groepscoaching no matter what the
+      // closer hoped. intended_tier is the fallback for ambiguous amounts.
       const tier =
-        tierByKey(lead?.intended_tier ?? null) ??
-        tierByAmountCents(input.amount_cents)
+        tierByAmountCents(input.amount_cents) ??
+        tierByKey(lead?.intended_tier ?? null)
       const programName = tier?.program ?? "default"
 
       // 2. Find or create the deal. Match by lead+amount so a duplicate

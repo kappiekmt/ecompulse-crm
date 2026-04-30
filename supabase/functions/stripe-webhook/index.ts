@@ -99,14 +99,16 @@ serve(async (req) => {
           leadIntendedTier = data?.intended_tier ?? null
         }
 
-        // Resolve which coaching offer this payment is for. Order:
-        //   1. lead.intended_tier (closer's pitch is the source of truth)
-        //   2. Stripe metadata.tier
-        //   3. amount-based fallback (€997 → fundament, etc.)
+        // Resolve which coaching offer this payment is for. The actual amount
+        // paid is the source of truth — closer might pitch 1-1 but if Stripe
+        // confirms €2,497 they bought Groepscoaching. Order:
+        //   1. amount-based match (nearest tier within €1,500)
+        //   2. Stripe metadata.tier — explicit override on the price/product
+        //   3. lead.intended_tier — closer's pitch as last-resort fallback
         const tier =
-          tierByKey(leadIntendedTier) ??
+          tierByAmountCents(amount) ??
           tierByKey((session.metadata?.tier as string | undefined) ?? null) ??
-          tierByAmountCents(amount)
+          tierByKey(leadIntendedTier)
         const programName =
           tier?.program ??
           (session.metadata?.program as string | undefined) ??

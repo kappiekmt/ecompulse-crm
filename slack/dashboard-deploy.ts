@@ -142,8 +142,8 @@ async function handleLead(p: SlashPayload) {
 
   const { data } = await supabase
     .from("leads")
-    .select("id, name, email, stage, scheduled_at")
-    .or(`email.ilike.%${q}%,name.ilike.%${q}%`)
+    .select("id, full_name, email, stage, scheduled_at")
+    .or(`email.ilike.%${q}%,full_name.ilike.%${q}%`)
     .limit(5)
 
   if (!data || data.length === 0) return ephemeral(`No leads matched \`${q}\`.`)
@@ -153,7 +153,7 @@ async function handleLead(p: SlashPayload) {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `*${l.name ?? "(no name)"}*\n${l.email ?? "—"}\nStage: \`${l.stage}\``,
+        text: `*${l.full_name ?? "(no name)"}*\n${l.email ?? "—"}\nStage: \`${l.stage}\``,
       },
       accessory: {
         type: "button",
@@ -180,8 +180,8 @@ async function handleNote(p: SlashPayload) {
 
   const { data: lead } = await supabase
     .from("leads")
-    .select("id, name")
-    .or(`email.ilike.%${target}%,name.ilike.%${target}%`)
+    .select("id, full_name")
+    .or(`email.ilike.%${target}%,full_name.ilike.%${target}%`)
     .limit(1)
     .maybeSingle()
 
@@ -193,7 +193,7 @@ async function handleNote(p: SlashPayload) {
     payload: { note, slack_user_id: p.user_id, slack_user_name: p.user_name } as never,
   })
 
-  return ephemeral(`📝 Note added to *${lead.name ?? "(unnamed)"}*.`)
+  return ephemeral(`📝 Note added to *${lead.full_name ?? "(unnamed)"}*.`)
 }
 
 async function handleStudentStatus(p: SlashPayload) {
@@ -204,7 +204,7 @@ async function handleStudentStatus(p: SlashPayload) {
   const { data: leads } = await supabase
     .from("leads")
     .select("id")
-    .or(`email.ilike.%${q}%,name.ilike.%${q}%`)
+    .or(`email.ilike.%${q}%,full_name.ilike.%${q}%`)
     .limit(10)
 
   const ids = (leads ?? []).map((l) => l.id)
@@ -213,7 +213,7 @@ async function handleStudentStatus(p: SlashPayload) {
   const { data } = await supabase
     .from("students")
     .select(
-      "id, program, coaching_tier, onboarding_status, enrolled_at, lead:leads(name, email), coach:team_members(full_name)",
+      "id, program, coaching_tier, onboarding_status, enrolled_at, lead:leads(full_name, email), coach:team_members(full_name)",
     )
     .in("lead_id", ids)
     .limit(5)
@@ -221,14 +221,14 @@ async function handleStudentStatus(p: SlashPayload) {
   if (!data || data.length === 0) return ephemeral(`No students matched \`${q}\`.`)
 
   const blocks = data.map((s) => {
-    const lead = (s.lead ?? {}) as { name?: string; email?: string }
+    const lead = (s.lead ?? {}) as { full_name?: string; email?: string }
     const coach = (s.coach ?? {}) as { full_name?: string }
     return {
       type: "section",
       text: {
         type: "mrkdwn",
         text: [
-          `*${lead.name ?? "(no name)"}* — ${lead.email ?? "—"}`,
+          `*${lead.full_name ?? "(no name)"}* — ${lead.email ?? "—"}`,
           `Tier: \`${s.coaching_tier ?? "—"}\` · Status: \`${s.onboarding_status}\``,
           `Coach: ${coach.full_name ?? "(unassigned)"} · Enrolled: ${new Date(s.enrolled_at).toLocaleDateString()}`,
         ].join("\n"),
@@ -279,8 +279,8 @@ async function handleAppMention(event: { user: string; channel: string; text: st
   const q = m[1].trim()
   const { data: lead } = await supabase
     .from("leads")
-    .select("id, name, email, phone, stage, source, scheduled_at, calendly_event_name")
-    .or(`email.ilike.%${q}%,name.ilike.%${q}%`)
+    .select("id, full_name, email, phone, stage, source, scheduled_at, calendly_event_name")
+    .or(`email.ilike.%${q}%,full_name.ilike.%${q}%`)
     .limit(1)
     .maybeSingle()
 
@@ -318,7 +318,7 @@ async function handleAppMention(event: { user: string; channel: string; text: st
   await postMessage({
     channel: event.channel,
     thread_ts: event.ts,
-    text: `*${lead.name ?? "(no name)"}* — ${lead.email}\n${summary}\n<${PUBLIC_APP_URL}/leads?id=${lead.id}|Open in CRM>`,
+    text: `*${lead.full_name ?? "(no name)"}* — ${lead.email}\n${summary}\n<${PUBLIC_APP_URL}/leads?id=${lead.id}|Open in CRM>`,
   })
 }
 

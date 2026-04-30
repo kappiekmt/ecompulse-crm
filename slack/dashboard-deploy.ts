@@ -135,6 +135,211 @@ interface SlashPayload {
 
 // ---------- Slash command handlers ----------
 
+function fmtMoney(cents: number | null | undefined, currency = "EUR"): string {
+  if (cents === null || cents === undefined) return "—"
+  const sym = currency === "EUR" ? "€" : currency === "USD" ? "$" : `${currency} `
+  return `${sym}${(cents / 100).toLocaleString("nl-NL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function fmtDate(iso: string | null | undefined, tz = "Europe/Amsterdam"): string {
+  if (!iso) return "—"
+  try {
+    return new Date(iso).toLocaleString("en-GB", {
+      timeZone: tz,
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+  } catch {
+    return iso
+  }
+}
+
+async function leadDetailBlocks(leadId: string): Promise<unknown[]> {
+  const supabase = adminClient()
+
+  const [leadRes, dealsRes, paymentsRes, activitiesRes, studentRes] = await Promise.all([
+    supabase
+      .from("leads")
+      .select(
+        "id, full_name, email, phone, instagram, timezone, stage, source, budget_cents, notes, created_at, booked_at, scheduled_at, cancelled_at, closed_at, calendly_event_name, calendly_join_url, calendly_cancel_url, calendly_reschedule_url, pre_call_started, closer:team_members!leads_closer_id_fkey(full_name), setter:team_members!leads_setter_id_fkey(full_name), tags:lead_tag_assignments(tag:lead_tags(name))",
+      )
+      .eq("id", leadId)
+      .maybeSingle(),
+    supabase
+      .from("deals")
+      .select("id, program, amount_cents, currency, status, coaching_tier, payment_plan, closed_at")
+      .eq("lead_id", leadId)
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("payments")
+      .select("amount_cents, currency, paid_at, is_refund")
+      .eq("lead_id", leadId)
+      .order("paid_at", { ascending: false }),
+    supabase
+      .from("activities")
+      .select("type, payload, created_at")
+      .eq("lead_id", leadId)
+      .order("created_at", { ascending: false })
+      .limit(5),
+    supabase
+      .from("students")
+      .select("program, coaching_tier, onboarding_status, coach:team_members(full_name)")
+      .eq("lead_id", leadId)
+      .maybeSingle(),
+  ])
+
+  const lead = leadRes.data as Record<string, unknown> | null
+  if (!lead) return [{ type: "section", text: { type: "mrkdwn", text: "Lead not found." } }]
+
+  const closer = (lead.closer as { full_name?: string } | null)?.full_name ?? "—"
+  const setter = (lead.setter as { full_name?: string } | null)?.full_name ?? "—"
+  const tags = ((lead.tags as { tag?: { name?: string } }[] | null) ?? [])
+    .map((t) => t.tag?.name)
+    .filter(Boolean)
+    .join(", ") || "—"
+  const tz = (lead.timezone as string | null) ?? "Europe/Amsterdam"
+
+  const totalPaid = (paymentsRes.data ?? []).reduce(
+    (sum, p) => sum + (p.is_refund ? -(p.amount_cents ?? 0) : (p.amount_cents ?? 0)),
+    0,
+  )
+  const currency = paymentsRes.data?.[0]?.currency ?? dealsRes.data?.[0]?.currency ?? "EUR"
+
+  const contact = [lead.email, lead.phone, lead.instagram ? `@${(lead.instagram as string).replace(/^@/, "")}` : null]
+    .filter(Boolean)
+    .join(" · ") || "—"
+
+  const blocks: unknown[] = []
+
+  blocks.push({
+    type: "header",
+    text: { type: "plain_text", text: (lead.full_name as string) ?? "(no name)" },
+  })
+  blocks.push({
+    type: "section",
+    text: {
+      type: "mrkdwn",
+      text: [
+        contact,
+        `Stage: \`${lead.stage}\` · Source: \`${lead.source ?? "—"}\` · Tags: ${tags}`,
+        lead.budget_cents ? `Budget: ${fmtMoney(lead.budget_cents as number, currency)}` : null,
+      ].filter(Boolean).join("\n"),
+    },
+  })
+
+  if (lead.scheduled_at || lead.calendly_event_name) {
+    const callBits = [
+      lead.calendly_event_name ? `*${lead.calendly_event_name}*` : "*Strategy call*",
+      fmtDate(lead.scheduled_at as string | null, tz),
+    ].join(" — ")
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: `📅 ${callBits}` } })
+    const callButtons: unknown[] = []
+    if (lead.calendly_join_url) {
+      callButtons.push({
+        type: "button",
+        text: { type: "plain_text", text: "Join call" },
+        url: lead.calendly_join_url,
+        style: "primary",
+      })
+    }
+    if (lead.calendly_reschedule_url) {
+      callButtons.push({
+        type: "button",
+        text: { type: "plain_text", text: "Reschedule" },
+        url: lead.calendly_reschedule_url,
+      })
+    }
+    if (lead.calendly_cancel_url) {
+      callButtons.push({
+        type: "button",
+        text: { type: "plain_text", text: "Cancel" },
+        url: lead.calendly_cancel_url,
+        style: "danger",
+      })
+    }
+    if (callButtons.length) blocks.push({ type: "actions", elements: callButtons })
+  }
+
+  blocks.push({
+    type: "section",
+    fields: [
+      { type: "mrkdwn", text: `*Closer:*\n${closer}` },
+      { type: "mrkdwn", text: `*Setter:*\n${setter}` },
+      { type: "mrkdwn", text: `*Booked:*\n${fmtDate(lead.booked_at as string | null, tz)}` },
+      { type: "mrkdwn", text: `*Pre-call SOP:*\n${lead.pre_call_started ? "✅ started" : "⏳ not started"}` },
+    ],
+  })
+
+  const deals = dealsRes.data ?? []
+  if (deals.length) {
+    blocks.push({ type: "divider" })
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: [
+          "💰 *Deals*",
+          ...deals.map((d) => {
+            const tierLabel = d.coaching_tier ? ` · \`${d.coaching_tier}\`` : ""
+            return `• ${d.program} — ${fmtMoney(d.amount_cents, d.currency)} · \`${d.status}\`${tierLabel}`
+          }),
+          `Total paid: ${fmtMoney(totalPaid, currency)}`,
+        ].join("\n"),
+      },
+    })
+  }
+
+  const student = studentRes.data as { program?: string; coaching_tier?: string; onboarding_status?: string; coach?: { full_name?: string } } | null
+  if (student) {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `🎓 *Student:* ${student.program} · tier \`${student.coaching_tier ?? "—"}\` · status \`${student.onboarding_status}\` · coach ${student.coach?.full_name ?? "—"}`,
+      },
+    })
+  }
+
+  const acts = activitiesRes.data ?? []
+  if (acts.length) {
+    blocks.push({ type: "divider" })
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: [
+          "🕒 *Recent activity*",
+          ...acts.map((a) => `• ${new Date(a.created_at).toLocaleDateString("en-GB")} — \`${a.type}\``),
+        ].join("\n"),
+      },
+    })
+  }
+
+  if (lead.notes) {
+    blocks.push({ type: "divider" })
+    blocks.push({
+      type: "section",
+      text: { type: "mrkdwn", text: `📝 *Notes*\n${(lead.notes as string).slice(0, 800)}` },
+    })
+  }
+
+  blocks.push({
+    type: "actions",
+    elements: [{
+      type: "button",
+      text: { type: "plain_text", text: "Open in CRM" },
+      url: `${PUBLIC_APP_URL}/leads?id=${lead.id}`,
+      style: "primary",
+    }],
+  })
+
+  return blocks
+}
+
 async function handleLead(p: SlashPayload) {
   const supabase = adminClient()
   const q = p.text.trim()
@@ -142,27 +347,35 @@ async function handleLead(p: SlashPayload) {
 
   const { data } = await supabase
     .from("leads")
-    .select("id, full_name, email, stage, scheduled_at")
+    .select("id, full_name, email, stage")
     .or(`email.ilike.%${q}%,full_name.ilike.%${q}%`)
     .limit(5)
 
   if (!data || data.length === 0) return ephemeral(`No leads matched \`${q}\`.`)
 
-  const blocks: unknown[] = data.flatMap((l) => [
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `*${l.full_name ?? "(no name)"}*\n${l.email ?? "—"}\nStage: \`${l.stage}\``,
+  // Single match — render the full card.
+  if (data.length === 1) {
+    const blocks = await leadDetailBlocks(data[0].id)
+    return new Response(JSON.stringify({ response_type: "ephemeral", blocks }), {
+      headers: { "Content-Type": "application/json" },
+    })
+  }
+
+  // Multiple matches — compact list, user re-runs with a more specific query.
+  const blocks: unknown[] = [
+    { type: "section", text: { type: "mrkdwn", text: `${data.length} matches for \`${q}\` — refine your query for the full card:` } },
+    ...data.flatMap((l) => [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: `*${l.full_name ?? "(no name)"}* — ${l.email ?? "—"} · \`${l.stage}\`` },
+        accessory: {
+          type: "button",
+          text: { type: "plain_text", text: "Open" },
+          url: `${PUBLIC_APP_URL}/leads?id=${l.id}`,
+        },
       },
-      accessory: {
-        type: "button",
-        text: { type: "plain_text", text: "Open in CRM" },
-        url: `${PUBLIC_APP_URL}/leads?id=${l.id}`,
-      },
-    },
-    { type: "divider" },
-  ])
+    ]),
+  ]
 
   return new Response(JSON.stringify({ response_type: "ephemeral", blocks }), {
     headers: { "Content-Type": "application/json" },

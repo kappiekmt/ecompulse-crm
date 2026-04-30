@@ -938,6 +938,7 @@ async function runOnboardDiscord(args: {
   responseUrl: string
   target: string
   discordUserId: string
+  tierOverride: "fundament" | "groepscoaching" | "one_on_one" | null
   bySlackUserId: string
 }): Promise<void> {
   try {
@@ -957,13 +958,32 @@ async function runOnboardDiscord(args: {
   }
 }
 
+function parseTierArg(input: string | undefined): "fundament" | "groepscoaching" | "one_on_one" | null {
+  if (!input) return null
+  const v = input.toLowerCase()
+  if (/^(1on1|1-on-1|1_on_1|one[_-]?on[_-]?one|oneonone)$/.test(v)) return "one_on_one"
+  if (/^(groep|groep[s]?|groepscoaching|group)$/.test(v)) return "groepscoaching"
+  if (/^(fundament|foundation|fund)$/.test(v)) return "fundament"
+  return null
+}
+
+function inferTierFromText(...names: (string | null | undefined)[]): "fundament" | "groepscoaching" | "one_on_one" | null {
+  const haystack = names.filter((n): n is string => !!n).map((n) => n.toLowerCase()).join(" | ")
+  if (!haystack) return null
+  if (/\b1[ -]?(?:op[ -]?)?1\b|one[ -]on[ -]one/.test(haystack)) return "one_on_one"
+  if (/groep/.test(haystack)) return "groepscoaching"
+  if (/fundament/.test(haystack)) return "fundament"
+  return null
+}
+
 async function onboardDiscordImpl(args: {
   target: string
   discordUserId: string
+  tierOverride: "fundament" | "groepscoaching" | "one_on_one" | null
   bySlackUserId: string
 }): Promise<{ text?: string; blocks?: unknown[] }> {
   const supabase = adminClient()
-  const { target, discordUserId } = args
+  const { target, discordUserId, tierOverride } = args
 
   const { data: lead } = await supabase
     .from("leads")
@@ -976,15 +996,28 @@ async function onboardDiscordImpl(args: {
 
   const { data: deal } = await supabase
     .from("deals")
-    .select("coaching_tier, program")
+    .select("id, coaching_tier, program")
     .eq("lead_id", lead.id)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle()
 
-  const tier = (deal?.coaching_tier as string | null) ?? null
+  // Resolve tier: explicit arg > deal column > inferred from program text.
+  const tier =
+    tierOverride ??
+    ((deal?.coaching_tier as string | null) as "fundament" | "groepscoaching" | "one_on_one" | null) ??
+    inferTierFromText(deal?.program as string | null)
+
   if (!tier) {
-    return { text: `Lead *${lead.full_name}* has no won deal with a coaching tier yet — Discord onboarding waits on a paid deal.` }
+    return {
+      text: `Couldn't determine the coaching tier for *${lead.full_name}*. Re-run with the tier appended:\n` +
+        `\`/onboard-discord ${lead.email ?? lead.full_name} ${discordUserId} fundament|groep|1on1\``,
+    }
+  }
+
+  // Backfill the deal's coaching_tier so future commands and reports get it.
+  if (deal && !deal.coaching_tier) {
+    await supabase.from("deals").update({ coaching_tier: tier }).eq("id", deal.id)
   }
 
   const { data: existingStudent } = await supabase
@@ -1059,10 +1092,15 @@ async function handleOnboardDiscord(p: SlashPayload): Promise<Response> {
   }
   const parts = p.text.trim().split(/\s+/)
   if (parts.length < 2) {
-    return ephemeral("Usage: `/onboard-discord <email or name> <discord-user-id>`")
+    return ephemeral("Usage: `/onboard-discord <email or name> <discord-user-id> [tier]`")
   }
-  const discordUserId = parts[parts.length - 1]
-  const target = parts.slice(0, -1).join(" ")
+
+  // Trailing tier arg is optional. We pop the last token; if it's a tier name
+  // use it as override, otherwise treat the whole tail as the discord ID.
+  const last = parts[parts.length - 1]
+  const maybeTier = parseTierArg(last)
+  const discordUserId = maybeTier ? parts[parts.length - 2] : last
+  const target = (maybeTier ? parts.slice(0, -2) : parts.slice(0, -1)).join(" ")
 
   if (!/^\d{15,21}$/.test(discordUserId)) {
     return ephemeral(`\`${discordUserId}\` doesn't look like a Discord user ID. Right-click the user (developer mode on) → Copy User ID.`)
@@ -1075,6 +1113,7 @@ async function handleOnboardDiscord(p: SlashPayload): Promise<Response> {
     responseUrl: p.response_url,
     target,
     discordUserId,
+    tierOverride: maybeTier,
     bySlackUserId: p.user_id,
   }).catch((e) => console.error("[slack-app] onboard runner error", e))
 

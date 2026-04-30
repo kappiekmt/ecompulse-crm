@@ -1,0 +1,68 @@
+{
+  "display_information": {
+    "name": "EcomPulse CRM",
+    "description": "CRM bot for the EcomPulse coaching team — pipeline lookups, notes, student status, AI lead summaries.",
+    "background_color": "#0b1220"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "EcomPulse CRM",
+      "always_online": true
+    },
+    "slash_commands": [
+      {
+        "command": "/lead",
+        "url": "https://coaching.joinecompulse.com/api/slack/commands",
+        "description": "Look up a lead by email or name",
+        "usage_hint": "<email or name>",
+        "should_escape": false
+      },
+      {
+        "command": "/note",
+        "url": "https://coaching.joinecompulse.com/api/slack/commands",
+        "description": "Add a note to a lead",
+        "usage_hint": "<email-or-name> :: <note>",
+        "should_escape": false
+      },
+      {
+        "command": "/student-status",
+        "url": "https://coaching.joinecompulse.com/api/slack/commands",
+        "description": "Check a student's onboarding + tier",
+        "usage_hint": "<name or email>",
+        "should_escape": false
+      }
+    ]
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "channels:read",
+        "chat:write",
+        "chat:write.public",
+        "commands",
+        "im:history",
+        "im:write",
+        "reactions:read",
+        "users:read",
+        "users:read.email"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "request_url": "https://coaching.joinecompulse.com/api/slack/events",
+      "bot_events": [
+        "app_mention",
+        "message.im"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "https://coaching.joinecompulse.com/api/slack/interactivity"
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

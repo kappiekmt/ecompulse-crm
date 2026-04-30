@@ -13,6 +13,11 @@ verify_jwt = false
 [functions.stripe-webhook]
 verify_jwt = false
 
+# Slack app receiver — slash commands, Events API, interactivity.
+# Verifies the Slack signing secret inside the function, no JWT needed.
+[functions.slack-app]
+verify_jwt = false
+
 [functions.public-api]
 verify_jwt = false
 

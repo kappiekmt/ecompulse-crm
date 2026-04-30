@@ -21,6 +21,10 @@
       "destination": "https://ecdqlgigczmiilvztsno.supabase.co/functions/v1/instagram-webhook"
     },
     {
+      "source": "/api/slack/:path*",
+      "destination": "https://ecdqlgigczmiilvztsno.supabase.co/functions/v1/slack-app/:path*"
+    },
+    {
       "source": "/((?!api/).*)",
       "destination": "/index.html"
     }

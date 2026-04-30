@@ -58,7 +58,8 @@ export interface InviteResult {
   team_member_id?: string
   user_id?: string
   email?: string
-  temp_password?: string
+  invite_sent_to?: string
+  redirect_to?: string
   error?: string
 }
 

@@ -14,7 +14,6 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
-import { CopyableUrl } from "@/components/integrations/CopyableUrl"
 import { inviteTeamMember } from "@/lib/queries/team"
 import { normalizeSlackId } from "@/lib/slack"
 import type { TeamRole } from "@/lib/database.types"
@@ -35,7 +34,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
   const [slackId, setSlackId] = React.useState("")
   const [submitting, setSubmitting] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
-  const [created, setCreated] = React.useState<{ email: string; password: string } | null>(null)
+  const [sent, setSent] = React.useState<{ email: string } | null>(null)
 
   React.useEffect(() => {
     if (!open) {
@@ -47,7 +46,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
       setCapacity("")
       setSlackId("")
       setError(null)
-      setCreated(null)
+      setSent(null)
     }
   }, [open])
 
@@ -69,11 +68,11 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
       slack_user_id: slackId ? normalizeSlackId(slackId) : null,
     })
     setSubmitting(false)
-    if (!res.ok || !res.temp_password) {
-      setError(res.error ?? "Failed to invite member")
+    if (!res.ok) {
+      setError(res.error ?? "Failed to send invite")
       return
     }
-    setCreated({ email: res.email!, password: res.temp_password })
+    setSent({ email: res.email! })
     qc.invalidateQueries({ queryKey: ["team-list"] })
     qc.invalidateQueries({ queryKey: ["team-members"] })
   }
@@ -82,25 +81,29 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{created ? "Member invited" : "Invite team member"}</DialogTitle>
+          <DialogTitle>{sent ? "Invite sent" : "Invite team member"}</DialogTitle>
           <DialogDescription>
-            {created
-              ? "Share these credentials with the new member. The password is shown once."
-              : "Creates an auth user + team_members row. They sign in immediately at /sign-in."}
+            {sent
+              ? "We emailed them a magic link. Clicking it lets them set a password and sign in."
+              : "We'll send them an invite email. They click the link → set a password → land in the CRM."}
           </DialogDescription>
         </DialogHeader>
 
-        {created ? (
+        {sent ? (
           <>
             <DialogBody>
-              <div className="rounded-md border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 p-3 text-xs">
+              <div className="rounded-md border border-[var(--color-success)]/30 bg-[var(--color-success)]/10 p-3 text-xs">
                 <span className="flex items-start gap-2">
-                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  Tell them to change this password after first sign-in.
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-success)]" />
+                  Invite email sent to <strong className="ml-1">{sent.email}</strong>. They'll
+                  appear in the team list immediately; once they accept, they can sign in.
                 </span>
               </div>
-              <CopyableUrl label="Email" value={created.email} />
-              <CopyableUrl label="Temporary password" value={created.password} />
+              <p className="text-xs text-[var(--color-muted-foreground)]">
+                If the email doesn't arrive within a few minutes, check Supabase Auth → SMTP
+                settings (the default sender has tight rate limits — for production, configure
+                custom SMTP via Resend / SendGrid).
+              </p>
             </DialogBody>
             <DialogFooter>
               <Button onClick={() => onOpenChange(false)}>Done</Button>

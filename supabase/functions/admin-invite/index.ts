@@ -1,11 +1,13 @@
-// POST /admin-invite { email, full_name, role, timezone? }
+// POST /admin-invite { email, full_name, role, timezone?, … }
 //
-// Admin-only. Creates a Supabase Auth user (email_confirm: true, random temp
-// password) and inserts a matching team_members row. Returns the temp password
-// once so the admin can pass it to the new user (or send them a reset link).
+// Admin-only. Sends a real invite email via Supabase Auth's
+// inviteUserByEmail flow. The new user clicks the link in their inbox,
+// lands on /set-password, picks a password, and is then signed in.
 //
-// Caller must be authenticated as an admin (verify_jwt = true). We instantiate
-// a per-request user-bound client to verify their role via team_members RLS.
+// We also insert the team_members row immediately so the admin can already
+// see them in the Team list (with status = pending until they accept).
+// If the team_members insert fails, we delete the just-created auth user
+// to avoid orphans.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
@@ -22,6 +24,9 @@ interface InviteBody {
   slack_user_id?: string | null
 }
 
+const REDIRECT_TO =
+  Deno.env.get("PUBLIC_APP_URL") ?? "https://coaching.joinecompulse.com/set-password"
+
 function jsonResponse(body: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(body), {
     ...init,
@@ -29,21 +34,10 @@ function jsonResponse(body: unknown, init: ResponseInit = {}) {
   })
 }
 
-function generatePassword(): string {
-  const bytes = new Uint8Array(18)
-  crypto.getRandomValues(bytes)
-  return btoa(String.fromCharCode(...bytes))
-    .replace(/\+/g, "")
-    .replace(/\//g, "")
-    .replace(/=+$/, "")
-    .slice(0, 24)
-}
-
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, { status: 405 })
 
-  // Confirm caller is an admin via RLS-protected query.
   const auth = req.headers.get("authorization") ?? ""
   const url = Deno.env.get("SUPABASE_URL")
   const anon = Deno.env.get("SUPABASE_ANON_KEY")
@@ -54,11 +48,8 @@ serve(async (req) => {
     auth: { persistSession: false, autoRefreshToken: false },
   })
 
-  const { data: me, error: meErr } = await userClient
-    .from("team_members")
-    .select("id, role")
-    .limit(2)
-  if (meErr || !me?.length || me.every((m) => m.role !== "admin")) {
+  const { data: me } = await userClient.from("team_members").select("id, role").limit(2)
+  if (!me?.length || me.every((m) => m.role !== "admin")) {
     return jsonResponse({ error: "Admin access required" }, { status: 403 })
   }
 
@@ -78,33 +69,41 @@ serve(async (req) => {
 
   const admin = adminClient()
 
-  // Pre-check: is the email already a team_member?
+  // Block duplicates so we don't send a second invite to an already-existing member.
   const { data: existing } = await admin
     .from("team_members")
     .select("id")
     .eq("email", body.email.trim())
     .maybeSingle()
   if (existing) {
-    return jsonResponse({ error: "A team member with that email already exists" }, { status: 409 })
+    return jsonResponse(
+      { error: "A team member with that email already exists" },
+      { status: 409 }
+    )
   }
 
-  // Create the auth user (email confirmed so they can sign in immediately).
-  const tempPassword = generatePassword()
-  const { data: created, error: createErr } = await admin.auth.admin.createUser({
-    email: body.email.trim(),
-    password: tempPassword,
-    email_confirm: true,
-    user_metadata: { full_name: body.full_name.trim() },
-  })
+  // Send the invite email. Supabase creates the auth user behind the scenes
+  // and emails them a magic link that lands on REDIRECT_TO.
+  const { data: invited, error: inviteErr } = await admin.auth.admin.inviteUserByEmail(
+    body.email.trim(),
+    {
+      data: { full_name: body.full_name.trim() },
+      redirectTo: REDIRECT_TO,
+    }
+  )
 
-  if (createErr || !created?.user) {
+  if (inviteErr || !invited?.user) {
     return jsonResponse(
-      { error: createErr?.message ?? "Failed to create auth user" },
+      {
+        error:
+          inviteErr?.message ??
+          "Failed to send invite. Check Supabase Auth → SMTP settings.",
+      },
       { status: 500 }
     )
   }
 
-  const userId = created.user.id
+  const userId = invited.user.id
 
   const { data: tm, error: tmErr } = await admin
     .from("team_members")
@@ -122,7 +121,7 @@ serve(async (req) => {
     .single()
 
   if (tmErr) {
-    // Roll back auth user so we don't have an orphan.
+    // Clean up the dangling invited auth user.
     await admin.auth.admin.deleteUser(userId)
     return jsonResponse({ error: tmErr.message }, { status: 500 })
   }
@@ -133,7 +132,8 @@ serve(async (req) => {
       team_member_id: tm?.id,
       user_id: userId,
       email: body.email.trim(),
-      temp_password: tempPassword,
+      invite_sent_to: body.email.trim(),
+      redirect_to: REDIRECT_TO,
     },
     { status: 201 }
   )

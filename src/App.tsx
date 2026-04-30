@@ -19,6 +19,7 @@ import { LeadTags } from "@/pages/LeadTags"
 import { Integrations } from "@/pages/Integrations"
 import { Help } from "@/pages/Help"
 import { SignIn } from "@/pages/SignIn"
+import { SetPassword } from "@/pages/SetPassword"
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false } },
@@ -49,6 +50,7 @@ function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/sign-in" element={<SignIn />} />
+            <Route path="/set-password" element={<SetPassword />} />
             <Route element={<ProtectedRoutes />}>
               <Route index element={<Dashboard />} />
               <Route path="command-center" element={<CommandCenter />} />

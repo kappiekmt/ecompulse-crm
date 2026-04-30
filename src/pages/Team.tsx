@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Loader2, Pause, Play, Plus } from "lucide-react"
+import { Loader2, Pause, Play, Plus, Trash2 } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -8,6 +8,8 @@ import { Select } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import { InviteMemberDialog } from "@/components/team/InviteMemberDialog"
 import { useTeamList, useUpdateTeamMember, type TeamMemberRow } from "@/lib/queries/team"
+import { useDeleteTeamMember } from "@/lib/queries/teamDelete"
+import { useAuth } from "@/lib/auth"
 import { initials } from "@/lib/utils"
 import { normalizeSlackId } from "@/lib/slack"
 import type { TeamRole } from "@/lib/database.types"
@@ -20,9 +22,31 @@ const ROLE_DESCRIPTIONS = [
 ]
 
 export function Team() {
+  const { profile } = useAuth()
   const team = useTeamList()
   const update = useUpdateTeamMember()
+  const remove = useDeleteTeamMember()
   const [inviteOpen, setInviteOpen] = React.useState(false)
+  const myId = profile?.id ?? null
+
+  async function handleDelete(member: TeamMemberRow) {
+    if (member.id === myId) {
+      alert("You can't delete your own admin account.")
+      return
+    }
+    const confirmed = confirm(
+      `Delete ${member.full_name} (${member.email}) permanently?\n\n` +
+        `Their auth login will be removed and the team_members row deleted. ` +
+        `Any leads / students they were assigned to will be unassigned (kept, not deleted).`
+    )
+    if (!confirmed) return
+    const res = await remove.mutateAsync(member.id)
+    if (!res.ok) {
+      alert(res.error ?? "Failed to delete member")
+    } else if (res.warning) {
+      alert(res.warning)
+    }
+  }
 
   return (
     <div className="flex flex-col">
@@ -90,9 +114,9 @@ export function Team() {
                       <MemberRow
                         key={m.id}
                         member={m}
-                        onPatch={(patch) =>
-                          update.mutate({ id: m.id, patch })
-                        }
+                        isMe={m.id === myId}
+                        onPatch={(patch) => update.mutate({ id: m.id, patch })}
+                        onDelete={() => handleDelete(m)}
                       />
                     ))}
                   </tbody>
@@ -110,10 +134,14 @@ export function Team() {
 
 function MemberRow({
   member,
+  isMe,
   onPatch,
+  onDelete,
 }: {
   member: TeamMemberRow
+  isMe: boolean
   onPatch: (patch: Partial<TeamMemberRow>) => void
+  onDelete: () => void
 }) {
   const [editing, setEditing] = React.useState(false)
   const [role, setRole] = React.useState<TeamRole>(member.role)
@@ -227,21 +255,35 @@ function MemberRow({
         </Badge>
       </td>
       <td className="px-4 py-3 text-right">
-        <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
-          Edit
-        </Button>
-        <Button
-          size="icon"
-          variant="ghost"
-          onClick={() => onPatch({ is_active: !member.is_active })}
-          aria-label={member.is_active ? "Deactivate" : "Reactivate"}
-        >
-          {member.is_active ? (
-            <Pause className="h-4 w-4" />
-          ) : (
-            <Play className="h-4 w-4" />
+        <div className="flex items-center justify-end gap-1">
+          <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+            Edit
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => onPatch({ is_active: !member.is_active })}
+            aria-label={member.is_active ? "Deactivate" : "Reactivate"}
+            title={member.is_active ? "Pause access (reversible)" : "Reactivate"}
+          >
+            {member.is_active ? (
+              <Pause className="h-4 w-4" />
+            ) : (
+              <Play className="h-4 w-4" />
+            )}
+          </Button>
+          {!isMe && (
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={onDelete}
+              aria-label="Delete"
+              title="Permanently delete (auth user + team_members row)"
+            >
+              <Trash2 className="h-4 w-4 text-[var(--color-destructive)]" />
+            </Button>
           )}
-        </Button>
+        </div>
       </td>
     </tr>
   )

@@ -3,6 +3,7 @@ import { GraduationCap, Loader2, UserPlus } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { StatCard } from "@/components/StatCard"
 import { Badge } from "@/components/ui/badge"
+import { StudentDetailDrawer } from "@/components/students/StudentDetailDrawer"
 import { useAuth } from "@/lib/auth"
 import { formatDateTime, initials } from "@/lib/utils"
 import { useMyStudents, useMyStudentCounts } from "@/lib/queries/me"
@@ -20,6 +21,7 @@ export function CoachDashboard() {
   const { profile } = useAuth()
   const students = useMyStudents()
   const counts = useMyStudentCounts()
+  const [activeId, setActiveId] = React.useState<string | null>(null)
 
   const pendingList = (students.data ?? []).filter((s) => s.onboarding_status === "pending")
   const inProgressList = (students.data ?? []).filter(
@@ -67,6 +69,7 @@ export function CoachDashboard() {
             icon={<UserPlus className="h-4 w-4" />}
             students={pendingList}
             tone="warning"
+            onSelect={setActiveId}
           />
         )}
 
@@ -77,6 +80,7 @@ export function CoachDashboard() {
           students={inProgressList}
           tone="default"
           loading={students.isLoading}
+          onSelect={setActiveId}
         />
 
         {completeList.length > 0 && (
@@ -87,9 +91,12 @@ export function CoachDashboard() {
             students={completeList}
             tone="default"
             collapsedDefault
+            onSelect={setActiveId}
           />
         )}
       </div>
+
+      <StudentDetailDrawer studentId={activeId} onClose={() => setActiveId(null)} />
     </div>
   )
 }
@@ -102,6 +109,7 @@ function StudentSection({
   tone,
   loading,
   collapsedDefault,
+  onSelect,
 }: {
   title: string
   description: string
@@ -110,6 +118,7 @@ function StudentSection({
   tone: "default" | "warning"
   loading?: boolean
   collapsedDefault?: boolean
+  onSelect: (id: string) => void
 }) {
   const [open, setOpen] = React.useState(!collapsedDefault)
 
@@ -155,7 +164,8 @@ function StudentSection({
                 return (
                   <li
                     key={s.id}
-                    className="flex items-center gap-3 px-4 py-3"
+                    onClick={() => onSelect(s.id)}
+                    className="flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors hover:bg-[var(--color-secondary)]/40"
                   >
                     <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--color-secondary)] text-[10px] font-semibold">
                       {initials(s.lead?.full_name ?? "?")}

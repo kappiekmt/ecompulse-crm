@@ -8,14 +8,19 @@
 --   fundament      — entry tier
 --   groepscoaching — group coaching tier
 --   one_on_one     — 1-on-1 coaching tier (highest)
+--
+-- Idempotent — safe to re-run.
 
-create type coaching_tier as enum ('fundament', 'groepscoaching', 'one_on_one');
+do $$ begin
+  create type coaching_tier as enum ('fundament', 'groepscoaching', 'one_on_one');
+exception when duplicate_object then null;
+end $$;
 
-alter table deals
+alter table public.deals
   add column if not exists coaching_tier coaching_tier;
 
-alter table students
+alter table public.students
   add column if not exists coaching_tier coaching_tier;
 
-create index if not exists deals_coaching_tier_idx on deals(coaching_tier);
-create index if not exists students_coaching_tier_idx on students(coaching_tier);
+create index if not exists deals_coaching_tier_idx on public.deals(coaching_tier);
+create index if not exists students_coaching_tier_idx on public.students(coaching_tier);

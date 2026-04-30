@@ -808,7 +808,10 @@ async function handleEventsPayload(payload: {
   if (!signatureValid) return new Response("invalid signature", { status: 401 })
 
   if (payload.type === "event_callback" && payload.event?.type === "app_mention") {
-    queueMicrotask(() => handleAppMention(payload.event!).catch((e) => console.error(e)))
+    const work = handleAppMention(payload.event!).catch((e) => console.error(e))
+    // deno-lint-ignore no-explicit-any
+    const er = (globalThis as any).EdgeRuntime
+    if (er?.waitUntil) er.waitUntil(work)
   }
   return new Response("", { status: 200 })
 }
@@ -1066,14 +1069,18 @@ async function handleOnboardDiscord(p: SlashPayload): Promise<Response> {
   }
 
   // Ack within 3s; do the slow Discord work async and post results to response_url.
-  queueMicrotask(() =>
-    runOnboardDiscord({
-      responseUrl: p.response_url,
-      target,
-      discordUserId,
-      bySlackUserId: p.user_id,
-    }).catch((e) => console.error("[slack-app] onboard runner error", e)),
-  )
+  // Supabase Edge Functions need EdgeRuntime.waitUntil to keep the worker
+  // alive past the response — queueMicrotask alone gets killed.
+  const work = runOnboardDiscord({
+    responseUrl: p.response_url,
+    target,
+    discordUserId,
+    bySlackUserId: p.user_id,
+  }).catch((e) => console.error("[slack-app] onboard runner error", e))
+
+  // deno-lint-ignore no-explicit-any
+  const er = (globalThis as any).EdgeRuntime
+  if (er?.waitUntil) er.waitUntil(work)
 
   return ephemeral(`⏳ Onboarding *${target}* — assigning role and (if 1-on-1) creating their private channel…`)
 }

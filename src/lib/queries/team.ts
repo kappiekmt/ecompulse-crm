@@ -69,6 +69,7 @@ export async function inviteTeamMember(input: {
   timezone?: string
   commission_pct?: number | null
   capacity?: number | null
+  slack_user_id?: string | null
 }): Promise<InviteResult> {
   const { data: sess } = await supabase.auth.getSession()
   const jwt = sess.session?.access_token

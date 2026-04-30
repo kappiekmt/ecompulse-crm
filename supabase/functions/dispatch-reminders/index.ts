@@ -41,6 +41,7 @@ interface MemberRow {
   full_name: string
   email: string
   timezone: string | null
+  slack_user_id: string | null
 }
 
 function jsonResponse(body: unknown, init: ResponseInit = {}) {
@@ -139,7 +140,7 @@ serve(async (req) => {
         if (lead.closer_id) {
           const { data } = await supabase
             .from("team_members")
-            .select("id, full_name, email, timezone")
+            .select("id, full_name, email, timezone, slack_user_id")
             .eq("id", lead.closer_id)
             .maybeSingle<MemberRow>()
           closer = data ?? null
@@ -165,6 +166,8 @@ serve(async (req) => {
                   full_name: closer.full_name,
                   email: closer.email,
                   timezone: closer.timezone,
+                  slack_user_id: closer.slack_user_id,
+                  slack_mention: closer.slack_user_id ? `<@${closer.slack_user_id}>` : null,
                 }
               : null,
             scheduled_at: scheduledAt,

@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input"
 import { InviteMemberDialog } from "@/components/team/InviteMemberDialog"
 import { useTeamList, useUpdateTeamMember, type TeamMemberRow } from "@/lib/queries/team"
 import { initials } from "@/lib/utils"
+import { normalizeSlackId } from "@/lib/slack"
 import type { TeamRole } from "@/lib/database.types"
 
 const ROLE_DESCRIPTIONS = [
@@ -77,6 +78,7 @@ export function Team() {
                       <th className="px-4 py-2.5 text-left font-medium">Member</th>
                       <th className="px-4 py-2.5 text-left font-medium">Role</th>
                       <th className="px-4 py-2.5 text-left font-medium">Timezone</th>
+                      <th className="px-4 py-2.5 text-left font-medium">Slack ID</th>
                       <th className="px-4 py-2.5 text-left font-medium">Commission %</th>
                       <th className="px-4 py-2.5 text-left font-medium">Capacity</th>
                       <th className="px-4 py-2.5 text-left font-medium">Status</th>
@@ -118,6 +120,7 @@ function MemberRow({
   const [tz, setTz] = React.useState(member.timezone ?? "")
   const [comm, setComm] = React.useState(member.commission_pct?.toString() ?? "")
   const [cap, setCap] = React.useState(member.capacity?.toString() ?? "")
+  const [slack, setSlack] = React.useState(member.slack_user_id ?? "")
 
   function save() {
     onPatch({
@@ -125,6 +128,7 @@ function MemberRow({
       timezone: tz.trim() || null,
       commission_pct: comm ? Number(comm) : null,
       capacity: cap ? Number(cap) : null,
+      slack_user_id: normalizeSlackId(slack),
     })
     setEditing(false)
   }
@@ -153,6 +157,13 @@ function MemberRow({
         </td>
         <td className="px-4 py-3">
           <Input value={tz} onChange={(e) => setTz(e.target.value)} />
+        </td>
+        <td className="px-4 py-3">
+          <Input
+            placeholder="U07ABC123"
+            value={slack}
+            onChange={(e) => setSlack(e.target.value)}
+          />
         </td>
         <td className="px-4 py-3">
           <Input
@@ -200,6 +211,9 @@ function MemberRow({
       </td>
       <td className="px-4 py-3 text-xs text-[var(--color-muted-foreground)]">
         {member.timezone ?? "—"}
+      </td>
+      <td className="px-4 py-3 font-mono text-xs text-[var(--color-muted-foreground)]">
+        {member.slack_user_id ?? "—"}
       </td>
       <td className="px-4 py-3 text-xs tabular-nums">
         {member.commission_pct != null ? `${member.commission_pct}%` : "—"}

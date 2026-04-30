@@ -19,6 +19,7 @@ interface InviteBody {
   timezone?: string
   commission_pct?: number | null
   capacity?: number | null
+  slack_user_id?: string | null
 }
 
 function jsonResponse(body: unknown, init: ResponseInit = {}) {
@@ -115,6 +116,7 @@ serve(async (req) => {
       timezone: body.timezone ?? null,
       commission_pct: body.commission_pct ?? null,
       capacity: body.capacity ?? null,
+      slack_user_id: body.slack_user_id ?? null,
     })
     .select("id")
     .single()

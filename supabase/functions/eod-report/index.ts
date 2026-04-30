@@ -20,6 +20,7 @@ const TZ = "Europe/Amsterdam"
 interface CloserMetrics {
   closer_id: string
   full_name: string
+  slack_user_id: string | null
   calls_booked: number
   calls_showed: number
   calls_no_show: number
@@ -32,6 +33,7 @@ interface CloserMetrics {
 interface SetterMetrics {
   setter_id: string
   full_name: string
+  slack_user_id: string | null
   bookings_made: number
 }
 
@@ -123,6 +125,16 @@ function eur(cents: number): string {
 function pct(num: number, den: number): number {
   if (den === 0) return 0
   return Math.round((num / den) * 1000) / 10
+}
+
+/**
+ * Render a team member's name as a Slack mention `<@U…>` when their slack_user_id
+ * is set, otherwise as plain bold text. Slack will turn the mention into a clickable
+ * @-handle and notify the user.
+ */
+function slackName(fullName: string, slackUserId: string | null): string {
+  if (slackUserId) return `<@${slackUserId}>`
+  return `*${fullName}*`
 }
 
 interface AuthResult {
@@ -222,7 +234,7 @@ serve(async (req) => {
         .eq("is_refund", false),
       supabase
         .from("team_members")
-        .select("id, full_name, role")
+        .select("id, full_name, role, slack_user_id")
         .eq("is_active", true)
         .in("role", ["closer", "setter"]),
     ])
@@ -258,6 +270,7 @@ serve(async (req) => {
       return {
         closer_id: m.id,
         full_name: m.full_name,
+        slack_user_id: (m as { slack_user_id?: string | null }).slack_user_id ?? null,
         calls_booked,
         calls_showed,
         calls_no_show,
@@ -274,6 +287,7 @@ serve(async (req) => {
     .map((m) => ({
       setter_id: m.id,
       full_name: m.full_name,
+      slack_user_id: (m as { slack_user_id?: string | null }).slack_user_id ?? null,
       bookings_made: (leadsToday ?? []).filter((l) => l.setter_id === m.id).length,
     }))
     .sort((a, b) => b.bookings_made - a.bookings_made)
@@ -387,7 +401,7 @@ function buildSlackMessage({
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `🥇  *Top closer today:*  *${topCloser.full_name}*  —  ${eur(topCloser.cash_collected_cents)}  ·  ${topCloser.deals_won} won`,
+        text: `🥇  *Top closer today:*  ${slackName(topCloser.full_name, topCloser.slack_user_id)}  —  ${eur(topCloser.cash_collected_cents)}  ·  ${topCloser.deals_won} won`,
       },
     })
   }
@@ -406,7 +420,7 @@ function buildSlackMessage({
       const rank = RANK_EMOJI[i] ?? "  •"
       const showed = `${c.calls_showed}/${c.calls_showed + c.calls_no_show}`
       const showRate = c.calls_showed + c.calls_no_show > 0 ? ` (${c.show_rate_pct}%)` : ""
-      return `${rank}  *${c.full_name}*  —  ${eur(c.cash_collected_cents)}  ·  ${c.deals_won} won  ·  ${showed} showed${showRate}  ·  close ${c.close_rate_pct}%`
+      return `${rank}  ${slackName(c.full_name, c.slack_user_id)}  —  ${eur(c.cash_collected_cents)}  ·  ${c.deals_won} won  ·  ${showed} showed${showRate}  ·  close ${c.close_rate_pct}%`
     })
     blocks.push({
       type: "section",
@@ -425,7 +439,7 @@ function buildSlackMessage({
   } else {
     const lines = setters.map(
       (s) =>
-        `  •  *${s.full_name}*  —  ${s.bookings_made} booking${s.bookings_made === 1 ? "" : "s"}`
+        `  •  ${slackName(s.full_name, s.slack_user_id)}  —  ${s.bookings_made} booking${s.bookings_made === 1 ? "" : "s"}`
     )
     blocks.push({
       type: "section",

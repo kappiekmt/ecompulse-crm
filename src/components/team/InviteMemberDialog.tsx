@@ -16,6 +16,7 @@ import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
 import { CopyableUrl } from "@/components/integrations/CopyableUrl"
 import { inviteTeamMember } from "@/lib/queries/team"
+import { normalizeSlackId } from "@/lib/slack"
 import type { TeamRole } from "@/lib/database.types"
 
 interface InviteMemberDialogProps {
@@ -31,6 +32,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
   const [timezone, setTimezone] = React.useState("Europe/Amsterdam")
   const [commission, setCommission] = React.useState("")
   const [capacity, setCapacity] = React.useState("")
+  const [slackId, setSlackId] = React.useState("")
   const [submitting, setSubmitting] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [created, setCreated] = React.useState<{ email: string; password: string } | null>(null)
@@ -43,6 +45,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
       setTimezone("Europe/Amsterdam")
       setCommission("")
       setCapacity("")
+      setSlackId("")
       setError(null)
       setCreated(null)
     }
@@ -63,6 +66,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
       timezone: timezone.trim() || undefined,
       commission_pct: commission ? Number(commission) : null,
       capacity: capacity ? Number(capacity) : null,
+      slack_user_id: slackId ? normalizeSlackId(slackId) : null,
     })
     setSubmitting(false)
     if (!res.ok || !res.temp_password) {
@@ -166,6 +170,18 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
                     value={capacity}
                     onChange={(e) => setCapacity(e.target.value)}
                   />
+                </div>
+                <div className="col-span-2 flex flex-col gap-1.5">
+                  <Label htmlFor="m-slack">Slack User ID</Label>
+                  <Input
+                    id="m-slack"
+                    placeholder="U07ABC123"
+                    value={slackId}
+                    onChange={(e) => setSlackId(e.target.value)}
+                  />
+                  <span className="text-xs text-[var(--color-muted-foreground)]">
+                    Optional. In Slack: profile → ⋯ → "Copy member ID". Used to @-mention them in EOD + pre-call reminders.
+                  </span>
                 </div>
               </div>
               {error && <p className="text-xs text-[var(--color-destructive)]">{error}</p>}

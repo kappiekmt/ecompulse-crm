@@ -90,6 +90,8 @@ const SAMPLE_PAYLOADS: Record<string, Record<string, unknown>> = {
       full_name: "Harry Watts",
       email: "harry@ecompulse.test",
       timezone: "Europe/Amsterdam",
+      slack_user_id: "U07ABC123",
+      slack_mention: "<@U07ABC123>",
     },
     scheduled_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
     scheduled_at_local: "Wednesday, 30 Apr at 08:00 pm (Amsterdam)",

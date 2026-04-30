@@ -76,6 +76,30 @@ const SAMPLE_PAYLOADS: Record<string, Record<string, unknown>> = {
     lead_id: "00000000-0000-0000-0000-000000000001",
     reason: "price",
   },
+  "pre_call.reminder": {
+    lead: {
+      id: "00000000-0000-0000-0000-000000000001",
+      full_name: "Owen Beaver",
+      email: "owenmngmt@gmail.com",
+      phone: "17149135364",
+      instagram: "0wenbevaer",
+      stage: "booked",
+    },
+    closer: {
+      id: "00000000-0000-0000-0000-000000000002",
+      full_name: "Harry Watts",
+      email: "harry@ecompulse.test",
+      timezone: "Europe/Amsterdam",
+    },
+    scheduled_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    scheduled_at_local: "Wednesday, 30 Apr at 08:00 pm (Amsterdam)",
+    timezone: "Europe/Amsterdam",
+    pre_call: {
+      started: true,
+      started_at: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+      status: "Confirmed",
+    },
+  },
 }
 
 function jsonResponse(body: unknown, init: ResponseInit = {}) {

@@ -73,6 +73,7 @@ export interface Database {
         source_landing_page: string | null
         notes: string | null
         source: string | null
+        intended_tier: string | null
         booked_at: string | null
         scheduled_at: string | null
         cancelled_at: string | null
@@ -110,6 +111,9 @@ export interface Database {
         program: string
         discord_user_id: string | null
         whop_membership_id: string | null
+        discord_invite_url: string | null
+        discord_invite_code: string | null
+        discord_invite_expires_at: string | null
         onboarding_status: "pending" | "in_progress" | "complete"
         onboarding_checklist: Json | null
         enrolled_at: string

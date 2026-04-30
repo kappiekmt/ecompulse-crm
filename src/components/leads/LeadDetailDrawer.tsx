@@ -33,6 +33,7 @@ import {
 import { useTeamMembers } from "@/lib/queries/dashboard"
 import type { LeadStage } from "@/lib/database.types"
 import { cn, formatCurrency, formatDateTime } from "@/lib/utils"
+import { TIERS } from "@/lib/tiers"
 
 interface LeadDetailDrawerProps {
   leadId: string | null
@@ -218,6 +219,19 @@ function Inner({ leadId, onClose }: { leadId: string; onClose: () => void }) {
                   patch({ budget_cents: Number.isFinite(cents) ? cents : null })
                 }}
               />
+            </Field>
+            <Field label="Tier (offer)">
+              <Select
+                value={l.intended_tier ?? ""}
+                onChange={(e) => patch({ intended_tier: e.target.value || null })}
+              >
+                <option value="">— Not pitched yet —</option>
+                {TIERS.map((t) => (
+                  <option key={t.key} value={t.key}>
+                    {t.label} ({formatCurrency(t.price_cents)})
+                  </option>
+                ))}
+              </Select>
             </Field>
           </div>
         </Section>

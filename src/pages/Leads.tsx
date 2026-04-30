@@ -7,6 +7,7 @@ import { Select } from "@/components/ui/select"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { StageBadge, ALL_LEAD_STAGES } from "@/components/leads/StageBadge"
+import { tierByKey } from "@/lib/tiers"
 import { LeadDetailDrawer } from "@/components/leads/LeadDetailDrawer"
 import { CreateLeadDialog } from "@/components/leads/CreateLeadDialog"
 import { useLeadsList, useLeadTagsAll } from "@/lib/queries/leads"
@@ -165,6 +166,7 @@ export function Leads() {
                       <Th onClick={() => toggleSort("full_name")}>Name</Th>
                       <Th>Contact</Th>
                       <Th onClick={() => toggleSort("stage")}>Stage</Th>
+                      <Th>Tier</Th>
                       <Th>Tags</Th>
                       <Th>Closer</Th>
                       <Th>Setter</Th>
@@ -206,6 +208,15 @@ export function Leads() {
                         </td>
                         <td className="px-4 py-3">
                           <StageBadge stage={l.stage} />
+                        </td>
+                        <td className="px-4 py-3">
+                          {l.intended_tier ? (
+                            <Badge variant="outline" className="text-[10px]">
+                              {tierByKey(l.intended_tier)?.label ?? l.intended_tier}
+                            </Badge>
+                          ) : (
+                            <span className="text-xs text-[var(--color-muted-foreground)]">—</span>
+                          )}
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex flex-wrap gap-1">

@@ -13,6 +13,7 @@ import { corsHeaders } from "../_shared/cors.ts"
 import { adminClient, getIntegrationConfig, logIntegration } from "../_shared/supabase-admin.ts"
 import { dispatchEvent } from "../_shared/dispatch.ts"
 import { resolveCoachingTier } from "../_shared/coaching-tier.ts"
+import { tierByAmountCents, tierByKey } from "../_shared/tiers.ts"
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
@@ -86,14 +87,29 @@ serve(async (req) => {
         )
 
         let leadId: string | null = null
+        let leadIntendedTier: string | null = null
         if (email) {
           const { data } = await supabase
             .from("leads")
-            .select("id")
+            .select("id, intended_tier")
             .eq("email", email)
             .maybeSingle()
           leadId = data?.id ?? null
+          leadIntendedTier = data?.intended_tier ?? null
         }
+
+        // Resolve which coaching offer this payment is for. Order:
+        //   1. lead.intended_tier (closer's pitch is the source of truth)
+        //   2. Stripe metadata.tier
+        //   3. amount-based fallback (€997 → fundament, etc.)
+        const tier =
+          tierByKey(leadIntendedTier) ??
+          tierByKey((session.metadata?.tier as string | undefined) ?? null) ??
+          tierByAmountCents(amount)
+        const programName =
+          tier?.program ??
+          (session.metadata?.program as string | undefined) ??
+          "default"
 
         if (leadId) {
           await supabase
@@ -105,7 +121,7 @@ serve(async (req) => {
             .from("deals")
             .insert({
               lead_id: leadId,
-              program: (session.metadata?.program as string | undefined) ?? "default",
+              program: programName,
               coaching_tier: coachingTier,
               amount_cents: amount,
               currency,
@@ -132,8 +148,39 @@ serve(async (req) => {
           await supabase.from("activities").insert({
             lead_id: leadId,
             type: "stripe.payment.received",
-            payload: { amount_cents: amount, currency } as never,
+            payload: { amount_cents: amount, currency, tier: tier?.key ?? null } as never,
           })
+
+          // Auto-create a student row so coach + onboarding flow can begin
+          // immediately. We don't pre-assign a coach — admin does that from
+          // the "Unassigned students" Command Center panel.
+          if (deal?.id) {
+            const { data: existing } = await supabase
+              .from("students")
+              .select("id")
+              .eq("deal_id", deal.id)
+              .maybeSingle()
+            if (!existing) {
+              const { data: newStudent } = await supabase
+                .from("students")
+                .insert({
+                  lead_id: leadId,
+                  deal_id: deal.id,
+                  program: programName,
+                  onboarding_status: "pending",
+                  enrolled_at: new Date().toISOString(),
+                })
+                .select("id")
+                .single()
+              if (newStudent?.id) {
+                await supabase.from("activities").insert({
+                  student_id: newStudent.id,
+                  type: "student.enrolled",
+                  payload: { tier: tier?.key ?? null, program: programName } as never,
+                })
+              }
+            }
+          }
         }
 
         await logIntegration(supabase, {

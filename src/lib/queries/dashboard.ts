@@ -109,9 +109,12 @@ export interface TeamMemberOption {
   role: string
 }
 
-export function useTeamMembers(role?: "closer" | "setter" | "coach" | "admin") {
+type TeamMemberRoleFilter = "closer" | "setter" | "coach" | "admin"
+
+export function useTeamMembers(role?: TeamMemberRoleFilter | TeamMemberRoleFilter[]) {
+  const roles = Array.isArray(role) ? role : role ? [role] : null
   return useQuery<TeamMemberOption[]>({
-    queryKey: ["team-members", role ?? "all"],
+    queryKey: ["team-members", roles?.slice().sort().join(",") ?? "all"],
     enabled: isSupabaseConfigured,
     queryFn: async () => {
       let q = supabase
@@ -119,7 +122,8 @@ export function useTeamMembers(role?: "closer" | "setter" | "coach" | "admin") {
         .select("id, full_name, role")
         .eq("is_active", true)
         .order("full_name")
-      if (role) q = q.eq("role", role)
+      if (roles && roles.length === 1) q = q.eq("role", roles[0])
+      else if (roles && roles.length > 1) q = q.in("role", roles)
       const { data, error } = await q
       if (error) throw error
       return (data ?? []) as TeamMemberOption[]

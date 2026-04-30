@@ -75,7 +75,7 @@ function Inner({ studentId }: { studentId: string }) {
   const { profile } = useAuth()
   const isAdmin = profile?.role === "admin"
   const student = useStudent(studentId)
-  const coaches = useTeamMembers("coach")
+  const coaches = useTeamMembers(["coach", "admin"])
   const update = useUpdateStudent()
 
   if (student.isLoading) {
@@ -187,6 +187,7 @@ function Inner({ studentId }: { studentId: string }) {
                   {(coaches.data ?? []).map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.full_name}
+                      {c.role === "admin" ? " (admin)" : ""}
                     </option>
                   ))}
                 </Select>

@@ -34,7 +34,7 @@ export function Students() {
   const [activeId, setActiveId] = React.useState<string | null>(null)
 
   const debouncedSearch = useDebounced(search, 250)
-  const coaches = useTeamMembers("coach")
+  const coaches = useTeamMembers(["coach", "admin"])
   const students = useStudentsList({
     coachId: isAdmin ? coachFilter || null : null,
     status: statusFilter,
@@ -121,6 +121,7 @@ export function Students() {
                 {(coaches.data ?? []).map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.full_name}
+                    {c.role === "admin" ? " (admin)" : ""}
                   </option>
                 ))}
               </Select>

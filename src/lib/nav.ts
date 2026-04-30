@@ -40,7 +40,7 @@ export const NAV_SECTIONS: NavSection[] = [
         label: "Command Center",
         to: "/command-center",
         icon: Command,
-        roles: ["admin", "closer", "setter"],
+        roles: ["admin", "closer", "setter", "coach"],
       },
     ],
   },

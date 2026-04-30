@@ -109,23 +109,22 @@ serve(async (req) => {
       closerId = data?.id ?? null
     }
 
+    const row: Record<string, unknown> = {
+      full_name: p.name ?? "Unknown",
+      stage: "booked",
+    }
+    if (p.email) row.email = p.email
+    if (p.timezone) row.timezone = p.timezone
+    if (closerId) row.closer_id = closerId
+    if (utm.utm_source) row.utm_source = utm.utm_source
+    if (utm.utm_medium) row.utm_medium = utm.utm_medium
+    if (utm.utm_campaign) row.utm_campaign = utm.utm_campaign
+    if (utm.utm_content) row.utm_content = utm.utm_content
+    if (utm.utm_term) row.utm_term = utm.utm_term
+
     const { data: lead, error: leadErr } = await supabase
       .from("leads")
-      .upsert(
-        {
-          full_name: p.name ?? "Unknown",
-          email: p.email ?? null,
-          timezone: p.timezone ?? null,
-          stage: "booked",
-          closer_id: closerId,
-          utm_source: utm.utm_source ?? null,
-          utm_medium: utm.utm_medium ?? null,
-          utm_campaign: utm.utm_campaign ?? null,
-          utm_content: utm.utm_content ?? null,
-          utm_term: utm.utm_term ?? null,
-        },
-        { onConflict: "email" }
-      )
+      .upsert(row, { onConflict: "email" })
       .select("id")
       .single()
 

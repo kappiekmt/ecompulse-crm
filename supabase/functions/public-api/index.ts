@@ -104,26 +104,33 @@ serve(async (req) => {
       return jsonResponse({ error: "full_name is required" }, { status: 400 })
     }
 
+    // Build the row with only the fields the caller actually provided so
+    // unspecified columns are preserved on conflict (instead of being nulled).
+    const row: Record<string, unknown> = {
+      full_name: body.full_name,
+      stage: "new",
+    }
+    const optional: (keyof LeadPayload)[] = [
+      "email",
+      "phone",
+      "instagram",
+      "timezone",
+      "utm_source",
+      "utm_medium",
+      "utm_campaign",
+      "utm_content",
+      "utm_term",
+      "source_landing_page",
+      "notes",
+    ]
+    for (const k of optional) {
+      const v = body[k]
+      if (v !== undefined && v !== null && v !== "") row[k] = v
+    }
+
     const { data: lead, error } = await supabase
       .from("leads")
-      .upsert(
-        {
-          full_name: body.full_name,
-          email: body.email ?? null,
-          phone: body.phone ?? null,
-          instagram: body.instagram ?? null,
-          timezone: body.timezone ?? null,
-          stage: "new",
-          utm_source: body.utm_source ?? null,
-          utm_medium: body.utm_medium ?? null,
-          utm_campaign: body.utm_campaign ?? null,
-          utm_content: body.utm_content ?? null,
-          utm_term: body.utm_term ?? null,
-          source_landing_page: body.source_landing_page ?? null,
-          notes: body.notes ?? null,
-        },
-        { onConflict: "email" }
-      )
+      .upsert(row, { onConflict: "email" })
       .select("id")
       .single()
 

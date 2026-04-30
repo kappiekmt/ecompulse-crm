@@ -1,6 +1,7 @@
 import * as React from "react"
-import { GraduationCap, Search, UserCog, UsersRound } from "lucide-react"
+import { FlaskConical, GraduationCap, Loader2, Search, UserCog, UsersRound } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
@@ -8,6 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { StatCard } from "@/components/StatCard"
 import { StudentDetailDrawer } from "@/components/students/StudentDetailDrawer"
 import {
+  useCreateTestStudent,
   useStudentCounts,
   useStudentsList,
   type OnboardingStatus,
@@ -41,6 +43,7 @@ export function Students() {
     search: debouncedSearch,
   })
   const counts = useStudentCounts()
+  const seed = useCreateTestStudent()
 
   return (
     <div className="flex flex-col">
@@ -50,6 +53,23 @@ export function Students() {
           isAdmin
             ? "Every active enrollment, who's coaching them, and where they are in onboarding."
             : "Your students and where they are in onboarding."
+        }
+        actions={
+          isAdmin ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => seed.mutate()}
+              disabled={seed.isPending}
+            >
+              {seed.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <FlaskConical className="h-3.5 w-3.5" />
+              )}
+              Add test student
+            </Button>
+          ) : undefined
         }
       />
 

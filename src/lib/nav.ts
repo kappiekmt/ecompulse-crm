@@ -2,7 +2,6 @@ import {
   LayoutDashboard,
   Users,
   GitBranch,
-  BookUser,
   UsersRound,
   Upload,
   CreditCard,
@@ -50,7 +49,6 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { label: "Leads", to: "/leads", icon: Users, roles: ["admin", "closer", "setter"] },
       { label: "Pipeline", to: "/pipeline", icon: GitBranch, roles: ["admin", "closer", "setter"] },
-      { label: "Directory", to: "/directory", icon: BookUser, roles: ["admin", "closer", "setter", "coach"] },
     ],
   },
   {

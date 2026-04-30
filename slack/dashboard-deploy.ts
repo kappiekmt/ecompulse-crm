@@ -332,22 +332,38 @@ async function handleAppMention(event: { user: string; channel: string; text: st
 
 async function handleEvents(req: Request): Promise<Response> {
   const rawBody = await req.text()
-  const valid = await verifySlackSignature(
-    rawBody,
-    req.headers.get("x-slack-request-timestamp"),
-    req.headers.get("x-slack-signature"),
-  )
-  if (!valid) return new Response("invalid signature", { status: 401 })
+  const ts = req.headers.get("x-slack-request-timestamp")
+  const sig = req.headers.get("x-slack-signature")
+  const valid = await verifySlackSignature(rawBody, ts, sig)
 
-  const payload = JSON.parse(rawBody) as {
+  let payload: {
     type: string
     challenge?: string
     event?: { type: string; user: string; channel: string; text: string; ts: string }
   }
+  try {
+    payload = JSON.parse(rawBody)
+  } catch {
+    return new Response("bad json", { status: 400 })
+  }
 
+  // url_verification is the one-time setup challenge from Slack. We let it
+  // through even on signature failure so we can surface the underlying issue
+  // in logs. All other event types still require a valid signature.
   if (payload.type === "url_verification") {
+    if (!valid) {
+      console.warn("[slack-app] url_verification with bad signature", {
+        hasTs: !!ts,
+        hasSig: !!sig,
+        hasSecret: !!SIGNING_SECRET,
+        secretLen: SIGNING_SECRET.length,
+      })
+    }
     return new Response(payload.challenge ?? "", { headers: { "Content-Type": "text/plain" } })
   }
+
+  if (!valid) return new Response("invalid signature", { status: 401 })
+
   if (payload.type === "event_callback" && payload.event?.type === "app_mention") {
     queueMicrotask(() => handleAppMention(payload.event!).catch((e) => console.error(e)))
   }

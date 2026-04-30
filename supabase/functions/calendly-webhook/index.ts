@@ -28,9 +28,15 @@ interface CalendlyEvent {
     event?: string                    // event uri
     scheduled_event?: {
       uri?: string
+      name?: string
       start_time?: string
       end_time?: string
-      location?: { type?: string; location?: string }
+      location?: {
+        type?: string
+        location?: string
+        join_url?: string
+        status?: string
+      }
       event_memberships?: { user_email?: string; user_name?: string }[]
     }
     tracking?: {
@@ -160,6 +166,10 @@ serve(async (req) => {
     if (p.cancel_url) row.calendly_cancel_url = p.cancel_url
     if (p.reschedule_url) row.calendly_reschedule_url = p.reschedule_url
     if (p.scheduled_event?.uri) row.calendly_event_id = p.scheduled_event.uri
+    if (p.scheduled_event?.name) row.calendly_event_name = p.scheduled_event.name
+    const joinUrl =
+      p.scheduled_event?.location?.join_url ?? p.scheduled_event?.location?.location ?? null
+    if (joinUrl && /^https?:\/\//.test(joinUrl)) row.calendly_join_url = joinUrl
     if (utm.utm_source) row.utm_source = utm.utm_source
     if (utm.utm_medium) row.utm_medium = utm.utm_medium
     if (utm.utm_campaign) row.utm_campaign = utm.utm_campaign
@@ -248,6 +258,17 @@ serve(async (req) => {
       closerName: closerFullName,
       closerSlackId,
       closerTimezone,
+      eventName: p.scheduled_event?.name ?? null,
+      joinUrl: joinUrl ?? null,
+      cancelUrl: p.cancel_url ?? null,
+      rescheduleUrl: p.reschedule_url ?? null,
+      attribution: {
+        utm_source: utm.utm_source ?? null,
+        utm_medium: utm.utm_medium ?? null,
+        utm_campaign: utm.utm_campaign ?? null,
+        utm_content: utm.utm_content ?? null,
+        utm_term: utm.utm_term ?? null,
+      },
     })
 
     return new Response(JSON.stringify({ ok: true, lead_id: lead.id }), {
@@ -356,6 +377,17 @@ interface BookingSlackArgs {
   closerName: string | null
   closerSlackId: string | null
   closerTimezone: string | null
+  eventName?: string | null
+  joinUrl?: string | null
+  cancelUrl?: string | null
+  rescheduleUrl?: string | null
+  attribution?: {
+    utm_source: string | null
+    utm_medium: string | null
+    utm_campaign: string | null
+    utm_content: string | null
+    utm_term: string | null
+  }
 }
 
 async function maybePostBookingSlack(
@@ -398,48 +430,143 @@ async function maybePostBookingSlack(
   })
 }
 
-function buildCreatedMessage(
-  args: BookingSlackArgs,
-  closerLine: string,
-  scheduledLine: string
-) {
-  const fields: { type: "mrkdwn"; text: string }[] = [
-    { type: "mrkdwn", text: `*Lead*\n${args.lead.full_name}` },
-    { type: "mrkdwn", text: `*Closer*\n${closerLine}` },
-  ]
-  if (args.lead.email) fields.push({ type: "mrkdwn", text: `*Email*\n${args.lead.email}` })
-  if (args.lead.phone) fields.push({ type: "mrkdwn", text: `*Phone*\n${args.lead.phone}` })
-  fields.push({ type: "mrkdwn", text: `*Scheduled*\n${scheduledLine}` })
+function buildCreatedMessage(args: BookingSlackArgs, _closerLine: string, _scheduledLine: string) {
+  const firstName = args.lead.full_name.split(" ")[0] || args.lead.full_name
+  const whenLine = formatShortLocalTime(args.scheduledFor, args.closerTimezone)
+  const sourceLine = formatAttribution(args.attribution) || "—"
+  const phoneFmt = args.lead.phone ? formatPhone(args.lead.phone) : "—"
 
-  const ctxParts: string[] = ["EcomPulse CRM · bookings"]
+  // 2x2 fields — When/Email, Phone/Source.
+  const fields = [
+    { type: "mrkdwn", text: `*When:*\n${whenLine}` },
+    { type: "mrkdwn", text: `*Email:*\n${args.lead.email ?? "—"}` },
+    { type: "mrkdwn", text: `*Phone:*\n${phoneFmt}` },
+    { type: "mrkdwn", text: `*Source:*\n${sourceLine}` },
+  ]
+
+  // Action buttons row.
+  const actions: Record<string, unknown>[] = []
+
+  // WhatsApp pre-call SOP button (only if we have a phone).
+  if (args.lead.phone) {
+    actions.push({
+      type: "button",
+      text: { type: "plain_text", text: "📱  WhatsApp (pre-call SOP)", emoji: true },
+      url: whatsappUrl(args.lead.phone, buildPreCallTemplate(args, firstName)),
+      style: "primary",
+    })
+  }
+
+  if (args.joinUrl) {
+    actions.push({
+      type: "button",
+      text: { type: "plain_text", text: "Join call" },
+      url: args.joinUrl,
+    })
+  }
+
+  if (args.rescheduleUrl) {
+    actions.push({
+      type: "button",
+      text: { type: "plain_text", text: "Reschedule" },
+      url: args.rescheduleUrl,
+    })
+  }
+
+  if (args.lead.email) {
+    actions.push({
+      type: "button",
+      text: { type: "plain_text", text: "Email" },
+      url: `mailto:${args.lead.email}`,
+    })
+  }
+
   if (args.lead.id) {
-    ctxParts.push(`<${leadDeepLink(args.lead.id)}|Open lead in CRM →>`)
+    actions.push({
+      type: "button",
+      text: { type: "plain_text", text: "Open in CRM" },
+      url: leadDeepLink(args.lead.id),
+    })
+  }
+
+  const blocks: Record<string, unknown>[] = [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `📅  *Call booked · ${firstName}*`,
+      },
+    },
+    { type: "section", fields },
+  ]
+
+  if (actions.length > 0) {
+    // Slack actions blocks support up to 25 elements, but practically 5 looks best.
+    blocks.push({ type: "actions", elements: actions.slice(0, 5) })
+  }
+
+  if (args.eventName) {
+    blocks.push({
+      type: "context",
+      elements: [{ type: "mrkdwn", text: `_${args.eventName}_` }],
+    })
+  }
+
+  if (sourceLine !== "—") {
+    blocks.push({
+      type: "context",
+      elements: [{ type: "mrkdwn", text: `🧭  *Attribution:* ${sourceLine}` }],
+    })
   }
 
   return {
-    text: `New lead booked: ${args.lead.full_name} — ${scheduledLine}`,
-    blocks: [
-      {
-        type: "header",
-        text: { type: "plain_text", text: "🗓  New Lead Booked", emoji: true },
-      },
-      { type: "section", fields },
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text:
-            (slackMention(args.closerSlackId) ?? "") +
-            (slackMention(args.closerSlackId) ? " — " : "") +
-            "Start your *Pre-Call SOP* now.",
-        },
-      },
-      {
-        type: "context",
-        elements: [{ type: "mrkdwn", text: ctxParts.join("  ·  ") }],
-      },
-    ],
+    text: `Call booked · ${args.lead.full_name} — ${whenLine}`,
+    blocks,
   }
+}
+
+/** "Tue 21 Apr, 11:00 (Europe/Amsterdam)" — matches the screenshot style. */
+function formatShortLocalTime(iso: string | null, timezone: string | null | undefined): string {
+  if (!iso) return "—"
+  const tz = timezone ?? "UTC"
+  const fmt = new Intl.DateTimeFormat("en-GB", {
+    timeZone: tz,
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  })
+  const parts = Object.fromEntries(
+    fmt.formatToParts(new Date(iso)).map((p) => [p.type, p.value])
+  ) as Record<string, string>
+  return `${parts.weekday} ${parts.day} ${parts.month}, ${parts.hour}:${parts.minute} (${tz})`
+}
+
+function formatAttribution(attr?: BookingSlackArgs["attribution"]): string {
+  if (!attr) return ""
+  const segments = [attr.utm_source, attr.utm_campaign, attr.utm_content, attr.utm_medium]
+    .filter((v): v is string => Boolean(v && v.trim()))
+  return segments.join(" · ")
+}
+
+function formatPhone(phone: string): string {
+  // Insert a space after the country code for readability: "+31 681349033"
+  const cleaned = phone.trim()
+  const m = cleaned.match(/^(\+\d{1,3})\s*(\d.*)$/)
+  return m ? `${m[1]} ${m[2].replace(/\s+/g, "")}` : cleaned
+}
+
+function whatsappUrl(phone: string, message: string): string {
+  const digits = phone.replace(/[^\d]/g, "")
+  return `https://wa.me/${digits}?text=${encodeURIComponent(message)}`
+}
+
+function buildPreCallTemplate(args: BookingSlackArgs, firstName: string): string {
+  const closerFirst = args.closerName?.split(" ")[0] ?? "the team"
+  const when = formatShortLocalTime(args.scheduledFor, args.closerTimezone)
+  return `Hi ${firstName} 👋 It's ${closerFirst} from EcomPulse. Just confirming our call: ${when}. To make the most of it, can you share what your current situation looks like and what 'a great call' would mean for you?`
 }
 
 function buildCancelledMessage(

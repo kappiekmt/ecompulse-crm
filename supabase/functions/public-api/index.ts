@@ -175,6 +175,43 @@ serve(async (req) => {
       }
     }
 
+    // Auto-queue (or update) the 15-min pre-call reminder when scheduled_at is provided.
+    // Idempotent: re-posting the same lead just updates the existing reminder's fire_at.
+    if (body.scheduled_at) {
+      const scheduledAt = new Date(body.scheduled_at)
+      if (!Number.isNaN(scheduledAt.getTime())) {
+        const fireAt = new Date(scheduledAt.getTime() - 15 * 60 * 1000).toISOString()
+
+        const { data: existing } = await supabase
+          .from("reminders")
+          .select("id")
+          .eq("lead_id", lead.id)
+          .eq("kind", "pre_call_15m")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+
+        if (existing) {
+          await supabase
+            .from("reminders")
+            .update({
+              fire_at: fireAt,
+              status: "scheduled",
+              completed_at: null,
+              payload: { scheduled_for: scheduledAt.toISOString(), source: "public_api" } as never,
+            })
+            .eq("id", existing.id)
+        } else {
+          await supabase.from("reminders").insert({
+            lead_id: lead.id,
+            kind: "pre_call_15m",
+            fire_at: fireAt,
+            payload: { scheduled_for: scheduledAt.toISOString(), source: "public_api" } as never,
+          })
+        }
+      }
+    }
+
     await supabase.from("activities").insert({
       lead_id: lead.id,
       type: "public_api.lead.create",

@@ -13,10 +13,18 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
 import { SopDetailDrawer } from "@/components/sops/SopDetailDrawer"
 import { SopEditDialog } from "@/components/sops/SopEditDialog"
 import { useAuth } from "@/lib/auth"
-import { SOP_CATEGORIES, useSops, useSopReads, type SopRow } from "@/lib/queries/sops"
+import {
+  SOP_CATEGORIES,
+  useMarkSopRead,
+  useSops,
+  useSopReads,
+  useUnmarkSopRead,
+  type SopRow,
+} from "@/lib/queries/sops"
 import { cn } from "@/lib/utils"
 
 export function Help() {
@@ -222,38 +230,48 @@ function SopCard({
   rank: number
   onOpen: () => void
 }) {
+  const mark = useMarkSopRead()
+  const unmark = useUnmarkSopRead()
+
   return (
-    <li>
+    <li className="flex items-center gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] p-3 transition-colors hover:bg-[var(--color-muted)]/40">
+      <span
+        className={cn(
+          "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold",
+          isRead
+            ? "bg-[var(--color-success)]/15 text-[var(--color-success)]"
+            : "bg-[var(--color-secondary)] text-[var(--color-foreground)]"
+        )}
+      >
+        {isRead ? <CheckCircle2 className="h-4 w-4" /> : rank}
+      </span>
       <button
         type="button"
         onClick={onOpen}
-        className="flex w-full items-center gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] p-3 text-left transition-colors hover:bg-[var(--color-muted)]/40"
+        className="flex min-w-0 flex-1 cursor-pointer flex-col text-left"
       >
-        <span
-          className={cn(
-            "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold",
-            isRead
-              ? "bg-[var(--color-success)]/15 text-[var(--color-success)]"
-              : "bg-[var(--color-secondary)] text-[var(--color-foreground)]"
-          )}
-        >
-          {isRead ? <CheckCircle2 className="h-4 w-4" /> : rank}
-        </span>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-sm font-medium">{sop.title}</span>
-          {sop.description && (
-            <span className="truncate text-xs text-[var(--color-muted-foreground)]">
-              {sop.description}
-            </span>
-          )}
-        </div>
-        {sop.read_time_minutes && (
-          <Badge variant="muted" className="text-[10px]">
-            <Clock className="mr-1 h-3 w-3" />
-            {sop.read_time_minutes}m
-          </Badge>
+        <span className="truncate text-sm font-medium">{sop.title}</span>
+        {sop.description && (
+          <span className="truncate text-xs text-[var(--color-muted-foreground)]">
+            {sop.description}
+          </span>
         )}
       </button>
+      {sop.read_time_minutes && (
+        <Badge variant="muted" className="text-[10px]">
+          <Clock className="mr-1 h-3 w-3" />
+          {sop.read_time_minutes}m
+        </Badge>
+      )}
+      <Switch
+        checked={isRead}
+        onCheckedChange={(checked) => {
+          if (checked) mark.mutate(sop.id)
+          else unmark.mutate(sop.id)
+        }}
+        disabled={mark.isPending || unmark.isPending}
+        aria-label={`Mark ${sop.title} as read`}
+      />
     </li>
   )
 }
@@ -268,14 +286,13 @@ function SopCardLarge({
   onOpen: () => void
 }) {
   const category = SOP_CATEGORIES.find((c) => c.key === sop.category)
+  const mark = useMarkSopRead()
+  const unmark = useUnmarkSopRead()
+
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="flex flex-col items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] p-4 text-left transition-colors hover:bg-[var(--color-muted)]/40"
-    >
-      <div className="flex w-full items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+    <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] p-4 transition-colors hover:bg-[var(--color-muted)]/40">
+      <div className="flex w-full items-start justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Badge variant="muted">
             {category?.emoji} {category?.label ?? sop.category}
           </Badge>
@@ -286,29 +303,45 @@ function SopCardLarge({
             </Badge>
           )}
         </div>
-        {isRead && (
-          <Badge variant="success" className="text-[10px]">
-            <CheckCircle2 className="mr-1 h-3 w-3" />
+        <label className="flex shrink-0 cursor-pointer items-center gap-1.5">
+          <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--color-muted-foreground)]">
             Read
-          </Badge>
-        )}
+          </span>
+          <Switch
+            checked={isRead}
+            onCheckedChange={(checked) => {
+              if (checked) mark.mutate(sop.id)
+              else unmark.mutate(sop.id)
+            }}
+            disabled={mark.isPending || unmark.isPending}
+            aria-label={`Mark ${sop.title} as read`}
+          />
+        </label>
       </div>
-      <span className="text-base font-medium">{sop.title}</span>
-      {sop.description && (
-        <span className="line-clamp-2 text-sm text-[var(--color-muted-foreground)]">
-          {sop.description}
-        </span>
-      )}
-      <div className="flex items-center gap-2 text-xs text-[var(--color-muted-foreground)]">
-        {sop.read_time_minutes && (
-          <>
-            <Clock className="h-3 w-3" />
-            {sop.read_time_minutes} min read
-            <span>·</span>
-          </>
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex flex-1 cursor-pointer flex-col items-start gap-2 text-left"
+      >
+        <span className="text-base font-medium">{sop.title}</span>
+        {sop.description && (
+          <span className="line-clamp-2 text-sm text-[var(--color-muted-foreground)]">
+            {sop.description}
+          </span>
         )}
-        <span>{sop.visible_to.length} role{sop.visible_to.length === 1 ? "" : "s"}</span>
-      </div>
-    </button>
+        <div className="flex items-center gap-2 text-xs text-[var(--color-muted-foreground)]">
+          {sop.read_time_minutes && (
+            <>
+              <Clock className="h-3 w-3" />
+              {sop.read_time_minutes} min read
+              <span>·</span>
+            </>
+          )}
+          <span>
+            {sop.visible_to.length} role{sop.visible_to.length === 1 ? "" : "s"}
+          </span>
+        </div>
+      </button>
+    </div>
   )
 }

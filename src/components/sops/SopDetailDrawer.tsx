@@ -1,7 +1,6 @@
-import * as React from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import { CheckCircle2, Clock, Loader2, Pencil, Undo2, Users } from "lucide-react"
+import { CheckCircle2, Clock, Loader2, Pencil, Users } from "lucide-react"
 import {
   Sheet,
   SheetBody,
@@ -12,6 +11,7 @@ import {
 } from "@/components/ui/sheet"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { Switch } from "@/components/ui/switch"
 import {
   SOP_CATEGORIES,
   useMarkSopRead,
@@ -44,14 +44,6 @@ function Inner({ sopId, onEdit }: { sopId: string; onEdit: (sopId: string) => vo
   const reads = useSopReads()
   const mark = useMarkSopRead()
   const unmark = useUnmarkSopRead()
-
-  // Auto-mark as read after 4s of viewing (so quick-glance doesn't count).
-  React.useEffect(() => {
-    if (!sop.data) return
-    if (reads.data?.has(sop.data.id)) return
-    const t = setTimeout(() => mark.mutate(sop.data!.id), 4000)
-    return () => clearTimeout(t)
-  }, [sop.data?.id, reads.data])
 
   if (sop.isLoading) {
     return (
@@ -125,27 +117,18 @@ function Inner({ sopId, onEdit }: { sopId: string; onEdit: (sopId: string) => vo
         <span className="mr-auto text-xs text-[var(--color-muted-foreground)]">
           Updated {formatDateTime(s.updated_at)} · v{s.version}
         </span>
-        {isRead ? (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => unmark.mutate(s.id)}
-            disabled={unmark.isPending}
-          >
-            <Undo2 className="h-3.5 w-3.5" />
-            Mark as unread
-          </Button>
-        ) : (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => mark.mutate(s.id)}
-            disabled={mark.isPending}
-          >
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            Mark as read
-          </Button>
-        )}
+        <label className="flex cursor-pointer items-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-1.5">
+          <span className="text-xs font-medium">Mark as read</span>
+          <Switch
+            checked={isRead}
+            onCheckedChange={(checked) => {
+              if (checked) mark.mutate(s.id)
+              else unmark.mutate(s.id)
+            }}
+            disabled={mark.isPending || unmark.isPending}
+            aria-label="Toggle read"
+          />
+        </label>
         {isAdmin && (
           <Button size="sm" onClick={() => onEdit(s.id)}>
             <Pencil className="h-3.5 w-3.5" />

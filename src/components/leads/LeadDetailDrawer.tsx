@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Select } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { QUICK_PICK_STAGES, stageLabel } from "@/components/leads/StageBadge"
 import {
   useAddPayment,
@@ -258,6 +259,34 @@ function Inner({ leadId, onClose }: { leadId: string; onClose: () => void }) {
               )}
             </div>
           )}
+        </Section>
+
+        {/* PRE-CALL */}
+        <Section label="Pre-call SOP">
+          <div className="flex items-start justify-between gap-3 rounded-md border border-[var(--color-border)] px-3 py-2.5">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-sm font-medium">Pre-call started</span>
+              {l.pre_call_started && l.pre_call_started_at ? (
+                <span className="text-xs text-[var(--color-success)]">
+                  Started {formatDateTime(l.pre_call_started_at)}
+                </span>
+              ) : (
+                <span className="text-xs text-[var(--color-muted-foreground)]">
+                  Toggle on when the closer begins the pre-call SOP for this lead.
+                </span>
+              )}
+            </div>
+            <Switch
+              checked={l.pre_call_started}
+              onCheckedChange={(checked) => {
+                patch({
+                  pre_call_started: checked,
+                  pre_call_started_at: checked ? new Date().toISOString() : null,
+                })
+              }}
+              aria-label="Toggle pre-call started"
+            />
+          </div>
         </Section>
 
         {/* PAYMENTS */}

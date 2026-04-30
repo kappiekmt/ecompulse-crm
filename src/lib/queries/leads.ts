@@ -22,6 +22,9 @@ export interface LeadListRow {
   budget_cents: number | null
   calendly_cancel_url: string | null
   calendly_reschedule_url: string | null
+  pre_call_started: boolean
+  pre_call_started_at: string | null
+  pre_call_completed_at: string | null
   created_at: string
   updated_at: string
   closer?: { id: string; full_name: string } | null
@@ -48,7 +51,7 @@ export function useLeadsList(filters: LeadListFilters = {}) {
       let q = supabase
         .from("leads")
         .select(
-          "id, full_name, email, phone, instagram, stage, closer_id, setter_id, utm_source, utm_campaign, notes, source, booked_at, scheduled_at, cancelled_at, closed_at, budget_cents, calendly_cancel_url, calendly_reschedule_url, created_at, updated_at, closer:team_members!leads_closer_id_fkey(id, full_name), setter:team_members!leads_setter_id_fkey(id, full_name), tags:lead_tag_assignments(tag_id, tag:lead_tags(name, color))"
+          "id, full_name, email, phone, instagram, stage, closer_id, setter_id, utm_source, utm_campaign, notes, source, booked_at, scheduled_at, cancelled_at, closed_at, budget_cents, calendly_cancel_url, calendly_reschedule_url, pre_call_started, pre_call_started_at, pre_call_completed_at, created_at, updated_at, closer:team_members!leads_closer_id_fkey(id, full_name), setter:team_members!leads_setter_id_fkey(id, full_name), tags:lead_tag_assignments(tag_id, tag:lead_tags(name, color))"
         )
 
       if (filters.stages?.length) {
@@ -87,7 +90,7 @@ export function useLead(id: string | null | undefined) {
       const { data, error } = await supabase
         .from("leads")
         .select(
-          "id, full_name, email, phone, instagram, stage, closer_id, setter_id, utm_source, utm_campaign, notes, source, booked_at, scheduled_at, cancelled_at, closed_at, budget_cents, calendly_cancel_url, calendly_reschedule_url, created_at, updated_at, closer:team_members!leads_closer_id_fkey(id, full_name), setter:team_members!leads_setter_id_fkey(id, full_name), tags:lead_tag_assignments(tag_id, tag:lead_tags(name, color))"
+          "id, full_name, email, phone, instagram, stage, closer_id, setter_id, utm_source, utm_campaign, notes, source, booked_at, scheduled_at, cancelled_at, closed_at, budget_cents, calendly_cancel_url, calendly_reschedule_url, pre_call_started, pre_call_started_at, pre_call_completed_at, created_at, updated_at, closer:team_members!leads_closer_id_fkey(id, full_name), setter:team_members!leads_setter_id_fkey(id, full_name), tags:lead_tag_assignments(tag_id, tag:lead_tags(name, color))"
         )
         .eq("id", id!)
         .maybeSingle()
@@ -111,6 +114,9 @@ export interface LeadUpdateInput {
   scheduled_at?: string | null
   closed_at?: string | null
   cancelled_at?: string | null
+  pre_call_started?: boolean
+  pre_call_started_at?: string | null
+  pre_call_completed_at?: string | null
 }
 
 export function useUpdateLead() {

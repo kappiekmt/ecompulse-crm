@@ -81,6 +81,9 @@ export interface Database {
         calendly_cancel_url: string | null
         calendly_reschedule_url: string | null
         calendly_event_id: string | null
+        pre_call_started: boolean
+        pre_call_started_at: string | null
+        pre_call_completed_at: string | null
         created_at: string
         updated_at: string
       }>

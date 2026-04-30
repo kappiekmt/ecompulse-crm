@@ -136,32 +136,6 @@ export interface Database {
         assigned_by: string | null
         assigned_at: string
       }>
-      conversations: Tbl<{
-        id: string
-        kind: "dm" | "ig"
-        lead_id: string | null
-        external_id: string | null
-        external_handle: string | null
-        subject: string | null
-        status: "open" | "snoozed" | "closed"
-        assigned_to: string | null
-        last_message_at: string | null
-        unread_count: number
-        created_at: string
-        updated_at: string
-      }>
-      messages: Tbl<{
-        id: string
-        conversation_id: string
-        direction: "inbound" | "outbound"
-        sender_team_member_id: string | null
-        sender_external_handle: string | null
-        body: string
-        attachments: Json | null
-        delivered_at: string | null
-        read_at: string | null
-        created_at: string
-      }>
       payments: Tbl<{
         id: string
         lead_id: string | null
@@ -348,6 +322,55 @@ export interface Database {
         revoked_at: string | null
         expires_at: string | null
         status: "active" | "revoked"
+      }>
+      kpi_snapshot_v: Vw<{
+        cash_collected_cents: number
+        order_value_cents: number
+        calls_booked: number
+        show_up_rate_pct: number
+        conversion_rate_pct: number
+        cancel_rate_pct: number
+        avg_order_per_call_cents: number
+        avg_order_per_close_cents: number
+      }>
+      daily_metrics_v: Vw<{
+        day: string
+        cash_collected_cents: number
+        refunds_cents: number
+        calls_booked: number
+        order_value_cents: number
+        wins: number
+        losses: number
+      }>
+      closer_performance_v: Vw<{
+        closer_id: string
+        full_name: string
+        calls_booked: number
+        calls_showed: number
+        calls_pitched: number
+        deals_won: number
+        deals_lost: number
+        cash_collected_cents: number
+        show_rate_pct: number
+        close_rate_pct: number
+      }>
+      setter_performance_v: Vw<{
+        setter_id: string
+        full_name: string
+        bookings_made: number
+        bookings_to_sale: number
+        conversion_rate_pct: number
+      }>
+      lead_funnel_v: Vw<{
+        lead_id: string
+        created_at: string
+        stage: LeadStage
+        closer_id: string | null
+        setter_id: string | null
+        did_show: boolean
+        was_pitched: boolean
+        is_won: boolean
+        cash_collected_cents: number
       }>
     }
     Functions: Record<string, never>

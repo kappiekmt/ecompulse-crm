@@ -3,8 +3,6 @@ import {
   Users,
   GitBranch,
   BookUser,
-  MessagesSquare,
-  AtSign,
   UsersRound,
   Upload,
   CreditCard,
@@ -52,13 +50,6 @@ export const NAV_SECTIONS: NavSection[] = [
       { label: "Leads", to: "/leads", icon: Users, roles: ["admin", "closer", "setter"] },
       { label: "Pipeline", to: "/pipeline", icon: GitBranch, roles: ["admin", "closer", "setter"] },
       { label: "Directory", to: "/directory", icon: BookUser, roles: ["admin", "closer", "setter", "coach"] },
-    ],
-  },
-  {
-    label: "Communication",
-    items: [
-      { label: "DM Chat", to: "/dm-chat", icon: MessagesSquare, roles: ["admin", "closer", "setter"] },
-      { label: "IG Chat", to: "/ig-chat", icon: AtSign, roles: ["admin", "closer", "setter"] },
     ],
   },
   {

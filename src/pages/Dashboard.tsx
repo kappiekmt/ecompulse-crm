@@ -8,10 +8,18 @@ import {
 } from "@/components/dashboard/DateRangeFilter"
 import { FilterSelect } from "@/components/dashboard/FilterSelect"
 import { LineChartCard } from "@/components/dashboard/LineChartCard"
-import { Leaderboard } from "@/components/dashboard/Leaderboard"
+import { Leaderboard, type LeaderboardRow } from "@/components/dashboard/Leaderboard"
 import { TeamPerformance } from "@/components/dashboard/TeamPerformance"
 import { useAuth } from "@/lib/auth"
 import { formatCurrency } from "@/lib/utils"
+import {
+  bucketMetrics,
+  useCloserPerformance,
+  useDailyMetrics,
+  useKpiSnapshot,
+  useSetterPerformance,
+  useTeamMembers,
+} from "@/lib/queries/dashboard"
 
 export function Dashboard() {
   const { profile } = useAuth()
@@ -19,10 +27,53 @@ export function Dashboard() {
   const [closer, setCloser] = React.useState("")
   const [setter, setSetter] = React.useState("")
 
-  // Empty placeholder series until Supabase is wired in.
-  const monthlyCash = buildEmptySeries(11, "month")
-  const weeklyOrder = buildEmptySeries(12, "week")
-  const weeklyCash = buildEmptySeries(12, "week")
+  const kpi = useKpiSnapshot()
+  const daily = useDailyMetrics()
+  const closers = useCloserPerformance()
+  const setters = useSetterPerformance()
+  const closerOptions = useTeamMembers("closer")
+  const setterOptions = useTeamMembers("setter")
+
+  const monthlyCash = React.useMemo(
+    () => bucketMetrics(daily.data ?? [], "month", "cash_collected_cents", 12),
+    [daily.data]
+  )
+  const weeklyOrder = React.useMemo(
+    () => bucketMetrics(daily.data ?? [], "week", "order_value_cents", 12),
+    [daily.data]
+  )
+  const weeklyCash = React.useMemo(
+    () => bucketMetrics(daily.data ?? [], "week", "cash_collected_cents", 12),
+    [daily.data]
+  )
+
+  const leaderboardRows: LeaderboardRow[] = (closers.data ?? [])
+    .filter((c) => c.cash_collected_cents > 0)
+    .slice(0, 5)
+    .map((c) => ({
+      id: c.closer_id,
+      name: c.full_name,
+      value: c.cash_collected_cents,
+      formattedValue: formatCurrency(c.cash_collected_cents),
+    }))
+
+  const teamCloserRows = (closers.data ?? []).map((c) => ({
+    id: c.closer_id,
+    name: c.full_name,
+    callsBooked: c.calls_booked,
+    showRate: c.show_rate_pct,
+    closeRate: c.close_rate_pct,
+    cashCollected: formatCurrency(c.cash_collected_cents),
+  }))
+
+  const teamSetterRows = (setters.data ?? []).map((s) => ({
+    id: s.setter_id,
+    name: s.full_name,
+    callsBooked: s.bookings_made,
+    showRate: 0,
+    closeRate: s.conversion_rate_pct,
+    cashCollected: "—",
+  }))
 
   return (
     <div className="flex flex-col">
@@ -47,55 +98,90 @@ export function Dashboard() {
         <div className="flex flex-wrap items-center gap-3">
           <DateRangeFilter value={range} onChange={setRange} />
           <div className="flex items-center gap-2">
-            <FilterSelect label="All Closers" value={closer} onChange={setCloser} />
-            <FilterSelect label="All Setters" value={setter} onChange={setSetter} />
+            <FilterSelect
+              label="All Closers"
+              value={closer}
+              onChange={setCloser}
+              options={(closerOptions.data ?? []).map((m) => ({ value: m.id, label: m.full_name }))}
+            />
+            <FilterSelect
+              label="All Setters"
+              value={setter}
+              onChange={setSetter}
+              options={(setterOptions.data ?? []).map((m) => ({ value: m.id, label: m.full_name }))}
+            />
           </div>
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <StatCard label="Cash Collected" value={formatCurrency(0)} deltaPct={0} />
-          <StatCard label="Order Value" value={formatCurrency(0)} deltaPct={0} />
-          <StatCard label="Calls Booked" value="0" deltaPct={0} />
-          <StatCard label="Show-up Rate" value="0.0%" deltaPct={0} />
-          <StatCard label="Conversion Rate" value="0.0%" deltaPct={0} />
-          <StatCard label="Cancel Rate" value="0.0%" deltaPct={0} />
-          <StatCard label="Avg Order / Call" value={formatCurrency(0)} />
-          <StatCard label="Avg Order / Close" value={formatCurrency(0)} />
+          <StatCard
+            label="Cash Collected"
+            value={formatCurrency(kpi.data?.cash_collected_cents ?? 0)}
+          />
+          <StatCard
+            label="Order Value"
+            value={formatCurrency(kpi.data?.order_value_cents ?? 0)}
+          />
+          <StatCard label="Calls Booked" value={(kpi.data?.calls_booked ?? 0).toString()} />
+          <StatCard
+            label="Show-up Rate"
+            value={`${(kpi.data?.show_up_rate_pct ?? 0).toFixed(1)}%`}
+          />
+          <StatCard
+            label="Conversion Rate"
+            value={`${(kpi.data?.conversion_rate_pct ?? 0).toFixed(1)}%`}
+          />
+          <StatCard
+            label="Cancel Rate"
+            value={`${(kpi.data?.cancel_rate_pct ?? 0).toFixed(1)}%`}
+          />
+          <StatCard
+            label="Avg Order / Call"
+            value={formatCurrency(kpi.data?.avg_order_per_call_cents ?? 0)}
+          />
+          <StatCard
+            label="Avg Order / Close"
+            value={formatCurrency(kpi.data?.avg_order_per_close_cents ?? 0)}
+          />
         </div>
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <Leaderboard
             title="Leaderboard — Cash Collected"
-            rows={[]}
-            emptyText="No closer revenue logged yet."
+            rows={leaderboardRows}
+            emptyText={
+              closers.isLoading
+                ? "Loading…"
+                : "No closer revenue logged yet. Cash arrives from Stripe → first deal won."
+            }
           />
           <LineChartCard
             title="Cash Collected Per Month"
-            data={monthlyCash}
-            format={(v) => formatCurrency(v * 100)}
+            data={monthlyCash.length ? monthlyCash : emptySeries(12, "month")}
+            format={(v) => formatCurrency(v)}
           />
         </div>
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <LineChartCard
             title="Order Value Per Week"
-            data={weeklyOrder}
-            format={(v) => formatCurrency(v * 100)}
+            data={weeklyOrder.length ? weeklyOrder : emptySeries(12, "week")}
+            format={(v) => formatCurrency(v)}
           />
           <LineChartCard
             title="Cash Collected Per Week"
-            data={weeklyCash}
-            format={(v) => formatCurrency(v * 100)}
+            data={weeklyCash.length ? weeklyCash : emptySeries(12, "week")}
+            format={(v) => formatCurrency(v)}
           />
         </div>
 
-        <TeamPerformance closers={[]} setters={[]} />
+        <TeamPerformance closers={teamCloserRows} setters={teamSetterRows} />
       </div>
     </div>
   )
 }
 
-function buildEmptySeries(count: number, unit: "week" | "month") {
+function emptySeries(count: number, unit: "week" | "month") {
   const now = new Date()
   const out = [] as { label: string; value: number }[]
   for (let i = count; i >= 0; i--) {

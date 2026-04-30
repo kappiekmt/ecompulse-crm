@@ -8,8 +8,6 @@ import { CommandCenter } from "@/pages/CommandCenter"
 import { Pipeline } from "@/pages/Pipeline"
 import { Leads } from "@/pages/Leads"
 import { Directory } from "@/pages/Directory"
-import { DMChat } from "@/pages/DMChat"
-import { IGChat } from "@/pages/IGChat"
 import { Students } from "@/pages/Students"
 import { Finance } from "@/pages/Finance"
 import { Reports } from "@/pages/Reports"
@@ -57,8 +55,6 @@ function App() {
               <Route path="leads" element={<Leads />} />
               <Route path="pipeline" element={<Pipeline />} />
               <Route path="directory" element={<Directory />} />
-              <Route path="dm-chat" element={<DMChat />} />
-              <Route path="ig-chat" element={<IGChat />} />
               <Route path="students" element={<Students />} />
               <Route path="finance" element={<Finance />} />
               <Route path="reports" element={<Reports />} />

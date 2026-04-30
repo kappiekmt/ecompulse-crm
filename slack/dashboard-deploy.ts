@@ -203,12 +203,12 @@ async function handleStudentStatus(p: SlashPayload) {
 
   const { data: leads } = await supabase
     .from("leads")
-    .select("id")
+    .select("id, full_name")
     .or(`email.ilike.%${q}%,full_name.ilike.%${q}%`)
     .limit(10)
 
   const ids = (leads ?? []).map((l) => l.id)
-  if (ids.length === 0) return ephemeral(`No students matched \`${q}\`.`)
+  if (ids.length === 0) return ephemeral(`No leads matched \`${q}\` — and no students either.`)
 
   const { data } = await supabase
     .from("students")
@@ -218,7 +218,12 @@ async function handleStudentStatus(p: SlashPayload) {
     .in("lead_id", ids)
     .limit(5)
 
-  if (!data || data.length === 0) return ephemeral(`No students matched \`${q}\`.`)
+  if (!data || data.length === 0) {
+    const names = (leads ?? []).map((l) => l.full_name).filter(Boolean).join(", ")
+    return ephemeral(
+      `Found lead${leads!.length > 1 ? "s" : ""} *${names}* but no student record yet — they haven't paid / been enrolled.`
+    )
+  }
 
   const blocks = data.map((s) => {
     const lead = (s.lead ?? {}) as { full_name?: string; email?: string }

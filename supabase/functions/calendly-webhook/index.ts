@@ -323,27 +323,57 @@ serve(async (req) => {
       },
     })
 
-    // Look up the lead so we can deep-link the closer back to it from Slack.
+    // Look up the lead so the Slack message can deep-link, ping the closer,
+    // include phone/event-name/attribution.
     let cancelledLeadId: string | null = null
     let cancelledScheduledAt: string | null = null
+    let cancelledPhone: string | null = null
+    let cancelledInstagram: string | null = null
+    let cancelledEventName: string | null = null
+    let cancelledRescheduleUrl: string | null = null
     let cancelledCloserName: string | null = null
     let cancelledCloserSlackId: string | null = null
     let cancelledCloserTimezone: string | null = null
+    let cancelledUtm: BookingSlackArgs["attribution"] | undefined = undefined
     if (p.email) {
       const { data: l } = await supabase
         .from("leads")
         .select(
-          "id, scheduled_at, closer:team_members!leads_closer_id_fkey(full_name, slack_user_id, timezone)"
+          "id, scheduled_at, phone, instagram, calendly_event_name, calendly_reschedule_url, utm_source, utm_medium, utm_campaign, utm_content, utm_term, closer:team_members!leads_closer_id_fkey(full_name, slack_user_id, timezone)"
         )
         .eq("email", p.email)
         .maybeSingle()
       if (l) {
-        cancelledLeadId = (l as { id: string }).id
-        cancelledScheduledAt = (l as { scheduled_at: string | null }).scheduled_at
-        const c = (l as { closer: { full_name?: string; slack_user_id?: string | null; timezone?: string | null } | null }).closer
-        cancelledCloserName = c?.full_name ?? null
-        cancelledCloserSlackId = c?.slack_user_id ?? null
-        cancelledCloserTimezone = c?.timezone ?? null
+        const ll = l as {
+          id: string
+          scheduled_at: string | null
+          phone: string | null
+          instagram: string | null
+          calendly_event_name: string | null
+          calendly_reschedule_url: string | null
+          utm_source: string | null
+          utm_medium: string | null
+          utm_campaign: string | null
+          utm_content: string | null
+          utm_term: string | null
+          closer: { full_name?: string; slack_user_id?: string | null; timezone?: string | null } | null
+        }
+        cancelledLeadId = ll.id
+        cancelledScheduledAt = ll.scheduled_at
+        cancelledPhone = ll.phone
+        cancelledInstagram = ll.instagram
+        cancelledEventName = ll.calendly_event_name
+        cancelledRescheduleUrl = ll.calendly_reschedule_url
+        cancelledCloserName = ll.closer?.full_name ?? null
+        cancelledCloserSlackId = ll.closer?.slack_user_id ?? null
+        cancelledCloserTimezone = ll.closer?.timezone ?? null
+        cancelledUtm = {
+          utm_source: ll.utm_source,
+          utm_medium: ll.utm_medium,
+          utm_campaign: ll.utm_campaign,
+          utm_content: ll.utm_content,
+          utm_term: ll.utm_term,
+        }
       }
     }
 
@@ -353,13 +383,17 @@ serve(async (req) => {
         id: cancelledLeadId,
         full_name: p.name ?? "Unknown",
         email: p.email ?? null,
-        phone: null,
-        instagram: null,
+        phone: cancelledPhone,
+        instagram: cancelledInstagram,
       },
       scheduledFor: cancelledScheduledAt,
       closerName: cancelledCloserName,
       closerSlackId: cancelledCloserSlackId,
       closerTimezone: cancelledCloserTimezone,
+      eventName: cancelledEventName,
+      cancelUrl: p.cancel_url ?? null,
+      rescheduleUrl: cancelledRescheduleUrl,
+      attribution: cancelledUtm,
     })
 
     return new Response("ok", { headers: corsHeaders })
@@ -408,7 +442,12 @@ async function maybePostBookingSlack(
   if (setting && setting.enabled === false) return
 
   const slackConfig = await getIntegrationConfig(supabase, "slack")
-  const webhookUrl = slackConfig?.bookings_webhook_url
+  // Cancellations route to a dedicated channel when configured, falling back
+  // to the bookings channel if not set.
+  const webhookUrl =
+    args.kind === "cancelled"
+      ? slackConfig?.cancellations_webhook_url || slackConfig?.bookings_webhook_url
+      : slackConfig?.bookings_webhook_url
   if (!webhookUrl) return
 
   const closerLine = args.closerName
@@ -592,35 +631,93 @@ function buildPreCallTemplate(args: BookingSlackArgs, firstName: string): string
   return `Hi ${firstName} 👋 It's ${closerFirst} from EcomPulse. Just confirming our call: ${when}. To make the most of it, can you share what your current situation looks like and what 'a great call' would mean for you?`
 }
 
-function buildCancelledMessage(
-  args: BookingSlackArgs,
-  closerLine: string,
-  scheduledLine: string
-) {
-  const fields: { type: "mrkdwn"; text: string }[] = [
-    { type: "mrkdwn", text: `*Lead*\n${args.lead.full_name}` },
-    { type: "mrkdwn", text: `*Closer*\n${closerLine}` },
-  ]
-  if (args.lead.email) fields.push({ type: "mrkdwn", text: `*Email*\n${args.lead.email}` })
-  fields.push({ type: "mrkdwn", text: `*Was scheduled*\n${scheduledLine}` })
+function buildCancelledMessage(args: BookingSlackArgs, closerLine: string, _scheduledLine: string) {
+  const firstName = args.lead.full_name.split(" ")[0] || args.lead.full_name
+  const wasScheduled = formatShortLocalTime(args.scheduledFor, args.closerTimezone)
+  const phoneFmt = args.lead.phone ? formatPhone(args.lead.phone) : "—"
+  const closerMentionTag = slackMention(args.closerSlackId)
 
-  const ctxParts: string[] = ["EcomPulse CRM · bookings"]
+  const fields = [
+    { type: "mrkdwn", text: `*Was scheduled:*\n${wasScheduled}` },
+    { type: "mrkdwn", text: `*Closer:*\n${closerLine}` },
+    { type: "mrkdwn", text: `*Email:*\n${args.lead.email ?? "—"}` },
+    { type: "mrkdwn", text: `*Phone:*\n${phoneFmt}` },
+  ]
+
+  const blocks: Record<string, unknown>[] = []
+
+  // @-mention so Slack notifies the closer that their call just dropped.
+  if (closerMentionTag) {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `${closerMentionTag} — heads up, your call was cancelled ❌`,
+      },
+    })
+  }
+
+  blocks.push(
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `❌  *Call cancelled · ${firstName}*`,
+      },
+    },
+    { type: "section", fields }
+  )
+
+  // Action buttons — short list focused on follow-up.
+  const actions: Record<string, unknown>[] = []
+
+  if (args.lead.phone) {
+    const message = `Hi ${firstName}, sorry we missed each other. Want to reschedule for another time that works for you?`
+    actions.push({
+      type: "button",
+      text: { type: "plain_text", text: "📱  WhatsApp follow-up", emoji: true },
+      url: whatsappUrl(args.lead.phone, message),
+      style: "primary",
+    })
+  }
+
+  if (args.lead.email) {
+    actions.push({
+      type: "button",
+      text: { type: "plain_text", text: "Email" },
+      url: `mailto:${args.lead.email}`,
+    })
+  }
+
   if (args.lead.id) {
-    ctxParts.push(`<${leadDeepLink(args.lead.id)}|Open lead in CRM →>`)
+    actions.push({
+      type: "button",
+      text: { type: "plain_text", text: "Open in CRM" },
+      url: leadDeepLink(args.lead.id),
+    })
+  }
+
+  if (actions.length > 0) {
+    blocks.push({ type: "actions", elements: actions.slice(0, 5) })
+  }
+
+  if (args.eventName) {
+    blocks.push({
+      type: "context",
+      elements: [{ type: "mrkdwn", text: `_${args.eventName}_` }],
+    })
+  }
+
+  const sourceLine = formatAttribution(args.attribution)
+  if (sourceLine) {
+    blocks.push({
+      type: "context",
+      elements: [{ type: "mrkdwn", text: `🧭  *Attribution:* ${sourceLine}` }],
+    })
   }
 
   return {
-    text: `Call cancelled: ${args.lead.full_name}`,
-    blocks: [
-      {
-        type: "header",
-        text: { type: "plain_text", text: "❌  Call Cancelled", emoji: true },
-      },
-      { type: "section", fields },
-      {
-        type: "context",
-        elements: [{ type: "mrkdwn", text: ctxParts.join("  ·  ") }],
-      },
-    ],
+    text: `Call cancelled · ${args.lead.full_name} (was ${wasScheduled})`,
+    blocks,
   }
 }

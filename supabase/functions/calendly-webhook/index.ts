@@ -18,7 +18,10 @@ interface CalendlyEvent {
     email?: string
     timezone?: string
     text_reminder_number?: string
+    uri?: string
+    event?: string                    // event uri
     scheduled_event?: {
+      uri?: string
       start_time?: string
       end_time?: string
       location?: { type?: string; location?: string }
@@ -32,6 +35,12 @@ interface CalendlyEvent {
       utm_term?: string
     }
     cancel_url?: string
+    reschedule_url?: string
+    cancellation?: {
+      canceled_by?: string
+      reason?: string
+      created_at?: string
+    }
     questions_and_answers?: { question: string; answer: string }[]
   }
 }
@@ -110,13 +119,21 @@ serve(async (req) => {
       closerId = data?.id ?? null
     }
 
+    const nowIso = new Date().toISOString()
     const row: Record<string, unknown> = {
       full_name: p.name ?? "Unknown",
       stage: "booked",
+      source: "calendly",
+      booked_at: nowIso,
     }
     if (p.email) row.email = p.email
+    if (p.text_reminder_number) row.phone = p.text_reminder_number
     if (p.timezone) row.timezone = p.timezone
     if (closerId) row.closer_id = closerId
+    if (scheduledFor) row.scheduled_at = scheduledFor
+    if (p.cancel_url) row.calendly_cancel_url = p.cancel_url
+    if (p.reschedule_url) row.calendly_reschedule_url = p.reschedule_url
+    if (p.scheduled_event?.uri) row.calendly_event_id = p.scheduled_event.uri
     if (utm.utm_source) row.utm_source = utm.utm_source
     if (utm.utm_medium) row.utm_medium = utm.utm_medium
     if (utm.utm_campaign) row.utm_campaign = utm.utm_campaign
@@ -205,6 +222,13 @@ serve(async (req) => {
         .eq("email", p.email)
         .maybeSingle()
       if (lead) {
+        await supabase
+          .from("leads")
+          .update({
+            stage: "cancelled",
+            cancelled_at: new Date().toISOString(),
+          })
+          .eq("id", lead.id)
         await supabase.from("activities").insert({
           lead_id: lead.id,
           type: "calendly.invitee.canceled",

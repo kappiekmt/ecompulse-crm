@@ -19,12 +19,16 @@ interface LeadPayload {
   phone?: string
   instagram?: string
   timezone?: string
+  stage?: string
+  scheduled_at?: string
   utm_source?: string
   utm_medium?: string
   utm_campaign?: string
   utm_content?: string
   utm_term?: string
   source_landing_page?: string
+  source?: string                     // 'calendly' | 'zapier' | 'landing_page' | etc.
+  budget_cents?: number
   notes?: string
   tags?: string[]
 }
@@ -107,10 +111,20 @@ serve(async (req) => {
 
     // Build the row with only the fields the caller actually provided so
     // unspecified columns are preserved on conflict (instead of being nulled).
+    const stage = body.stage ?? "new"
     const row: Record<string, unknown> = {
       full_name: body.full_name,
-      stage: "new",
+      stage,
+      source: body.source ?? "public_api",
     }
+    if (
+      ["booked", "confirmed", "showed", "no_show", "pitched", "won", "lost"].includes(stage)
+    ) {
+      row.booked_at = new Date().toISOString()
+    }
+    if (body.scheduled_at) row.scheduled_at = body.scheduled_at
+    if (body.budget_cents != null) row.budget_cents = body.budget_cents
+
     const optional: (keyof LeadPayload)[] = [
       "email",
       "phone",

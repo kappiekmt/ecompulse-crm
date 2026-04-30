@@ -19,6 +19,9 @@ export type LeadStage =
   | "active_student"
   | "churned"
   | "refunded"
+  | "cancelled"
+  | "follow_up_short"
+  | "follow_up_long"
 
 export type TeamRole = "admin" | "closer" | "setter" | "coach"
 
@@ -69,6 +72,15 @@ export interface Database {
         utm_term: string | null
         source_landing_page: string | null
         notes: string | null
+        source: string | null
+        booked_at: string | null
+        scheduled_at: string | null
+        cancelled_at: string | null
+        closed_at: string | null
+        budget_cents: number | null
+        calendly_cancel_url: string | null
+        calendly_reschedule_url: string | null
+        calendly_event_id: string | null
         created_at: string
         updated_at: string
       }>

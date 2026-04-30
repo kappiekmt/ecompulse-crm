@@ -27,6 +27,7 @@ export function formatDateTime(input: string | Date) {
   return d.toLocaleString("en-US", {
     month: "short",
     day: "numeric",
+    year: "numeric",
     hour: "numeric",
     minute: "2-digit",
   })

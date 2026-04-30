@@ -1,34 +1,37 @@
 import * as React from "react"
-import { Loader2, Save, Tag, X } from "lucide-react"
+import {
+  CalendarX,
+  CalendarClock,
+  Loader2,
+  Plus,
+  Trash2,
+} from "lucide-react"
+import { useQueryClient } from "@tanstack/react-query"
 import {
   Sheet,
   SheetBody,
   SheetContent,
-  SheetDescription,
   SheetFooter,
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Select } from "@/components/ui/select"
-import { Badge } from "@/components/ui/badge"
-import { StageBadge, ALL_LEAD_STAGES } from "@/components/leads/StageBadge"
-import { LogCallOutcomeForm } from "@/components/leads/LogCallOutcomeForm"
+import { QUICK_PICK_STAGES, stageLabel } from "@/components/leads/StageBadge"
 import {
+  useAddPayment,
+  useDeleteLead,
   useLead,
-  useLeadActivities,
-  useLeadCallOutcomes,
-  useLeadTagsAll,
-  useToggleLeadTag,
+  useLeadPayments,
+  useLogCallOutcome,
   useUpdateLead,
-  type LeadListRow,
+  type CallResult,
 } from "@/lib/queries/leads"
 import { useTeamMembers } from "@/lib/queries/dashboard"
 import type { LeadStage } from "@/lib/database.types"
-import { formatDateTime } from "@/lib/utils"
+import { cn, formatCurrency, formatDateTime } from "@/lib/utils"
 
 interface LeadDetailDrawerProps {
   leadId: string | null
@@ -39,27 +42,22 @@ export function LeadDetailDrawer({ leadId, onClose }: LeadDetailDrawerProps) {
   const open = Boolean(leadId)
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent width="640px">
-        {leadId && <Inner leadId={leadId} />}
+      <SheetContent width="560px">
+        {leadId && <Inner leadId={leadId} onClose={onClose} />}
       </SheetContent>
     </Sheet>
   )
 }
 
-function Inner({ leadId }: { leadId: string }) {
+function Inner({ leadId, onClose }: { leadId: string; onClose: () => void }) {
+  const qc = useQueryClient()
   const lead = useLead(leadId)
   const closers = useTeamMembers("closer")
   const setters = useTeamMembers("setter")
-  const allTags = useLeadTagsAll()
-  const activities = useLeadActivities(leadId)
-  const outcomes = useLeadCallOutcomes(leadId)
+  const payments = useLeadPayments(leadId)
   const update = useUpdateLead()
-  const toggleTag = useToggleLeadTag()
-
-  const [draft, setDraft] = React.useState<Partial<LeadListRow>>({})
-  React.useEffect(() => {
-    if (lead.data) setDraft({})
-  }, [lead.data?.id])
+  const remove = useDeleteLead()
+  const logOutcome = useLogCallOutcome()
 
   if (lead.isLoading) {
     return (
@@ -79,90 +77,88 @@ function Inner({ leadId }: { leadId: string }) {
   }
 
   const l = lead.data
-  const isDirty = Object.keys(draft).length > 0
-  function setField<K extends keyof LeadListRow>(key: K, value: LeadListRow[K]) {
-    setDraft((prev) => ({ ...prev, [key]: value }))
+
+  function patch(p: Parameters<typeof update.mutate>[0]["patch"]) {
+    update.mutate({ id: l.id, patch: p })
   }
 
-  async function save() {
-    await update.mutateAsync({
-      id: l.id,
-      patch: {
-        full_name: (draft.full_name as string) ?? l.full_name,
-        email: (draft.email as string | null | undefined) ?? l.email,
-        phone: (draft.phone as string | null | undefined) ?? l.phone,
-        instagram: (draft.instagram as string | null | undefined) ?? l.instagram,
-        stage: (draft.stage as LeadStage) ?? l.stage,
-        closer_id: (draft.closer_id as string | null | undefined) ?? l.closer_id,
-        setter_id: (draft.setter_id as string | null | undefined) ?? l.setter_id,
-        notes: (draft.notes as string | null | undefined) ?? l.notes,
-      },
-    })
-    setDraft({})
+  // Map a quick-pick stage to the call_outcomes.result value (if any). Stages
+  // that aren't post-call outcomes don't write to call_outcomes — they only
+  // update the lead row.
+  const STAGE_TO_OUTCOME: Partial<Record<LeadStage, CallResult>> = {
+    showed: "showed",
+    no_show: "no_show",
+    won: "closed",
+    lost: "lost",
   }
 
-  const currentTagIds = new Set(l.tags?.map((t) => t.tag_id) ?? [])
+  function setStage(stage: LeadStage) {
+    const now = new Date().toISOString()
+    const extra: Record<string, string | null> = {}
+    if (stage === "won" || stage === "lost") extra.closed_at = now
+    if (stage === "cancelled") extra.cancelled_at = now
+    patch({ stage, ...extra })
+
+    const result = STAGE_TO_OUTCOME[stage]
+    if (result) {
+      logOutcome.mutate({
+        leadId: l.id,
+        closerId: l.closer_id,
+        result,
+        occurredAt: now,
+      })
+    }
+  }
+
+  async function deleteLead() {
+    if (!confirm("Delete this lead? This is permanent.")) return
+    await remove.mutateAsync(l.id)
+    onClose()
+  }
 
   return (
     <>
       <SheetHeader>
         <div className="flex items-center justify-between gap-3">
-          <div className="flex flex-col gap-1">
-            <SheetTitle>{l.full_name}</SheetTitle>
-            <SheetDescription>
-              {l.email ?? "—"} {l.phone ? `· ${l.phone}` : ""}
-            </SheetDescription>
-          </div>
-          <StageBadge stage={l.stage} />
+          <SheetTitle>{l.full_name}</SheetTitle>
         </div>
       </SheetHeader>
 
       <SheetBody>
-        <Section title="Identity">
+        {/* STATUS PILLS */}
+        <Section label="Status">
+          <div className="flex flex-wrap gap-1.5">
+            {QUICK_PICK_STAGES.map((stage) => {
+              const active = l.stage === stage
+              return (
+                <button
+                  key={stage}
+                  type="button"
+                  onClick={() => setStage(stage)}
+                  disabled={update.isPending}
+                  className={cn(
+                    "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                    active
+                      ? "border-[var(--color-primary)] bg-[var(--color-primary)]/10 text-[var(--color-primary)]"
+                      : "border-[var(--color-border)] text-[var(--color-muted-foreground)] hover:border-[var(--color-foreground)] hover:text-[var(--color-foreground)]"
+                  )}
+                >
+                  {stageLabel(stage).toLowerCase()}
+                </button>
+              )
+            })}
+          </div>
+        </Section>
+
+        {/* ASSIGNMENTS */}
+        <Section label="Assignments">
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Full name">
-              <Input
-                value={(draft.full_name as string | undefined) ?? l.full_name}
-                onChange={(e) => setField("full_name", e.target.value)}
-              />
-            </Field>
-            <Field label="Stage">
-              <Select
-                value={(draft.stage as string | undefined) ?? l.stage}
-                onChange={(e) => setField("stage", e.target.value as LeadStage)}
-              >
-                {ALL_LEAD_STAGES.map((s) => (
-                  <option key={s} value={s}>
-                    {s.replace(/_/g, " ")}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Field label="Email">
-              <Input
-                type="email"
-                value={(draft.email as string | undefined) ?? l.email ?? ""}
-                onChange={(e) => setField("email", e.target.value || null)}
-              />
-            </Field>
-            <Field label="Phone">
-              <Input
-                value={(draft.phone as string | undefined) ?? l.phone ?? ""}
-                onChange={(e) => setField("phone", e.target.value || null)}
-              />
-            </Field>
-            <Field label="Instagram">
-              <Input
-                value={(draft.instagram as string | undefined) ?? l.instagram ?? ""}
-                onChange={(e) => setField("instagram", e.target.value || null)}
-              />
-            </Field>
             <Field label="Closer">
               <Select
-                value={(draft.closer_id as string | undefined) ?? l.closer_id ?? ""}
-                onChange={(e) => setField("closer_id", e.target.value || null)}
+                value={l.closer_id ?? ""}
+                onChange={(e) => patch({ closer_id: e.target.value || null })}
               >
-                <option value="">— Unassigned —</option>
+                <option value="">Unassigned</option>
                 {(closers.data ?? []).map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.full_name}
@@ -172,10 +168,10 @@ function Inner({ leadId }: { leadId: string }) {
             </Field>
             <Field label="Setter">
               <Select
-                value={(draft.setter_id as string | undefined) ?? l.setter_id ?? ""}
-                onChange={(e) => setField("setter_id", e.target.value || null)}
+                value={l.setter_id ?? ""}
+                onChange={(e) => patch({ setter_id: e.target.value || null })}
               >
-                <option value="">— Unassigned —</option>
+                <option value="">Unassigned</option>
                 {(setters.data ?? []).map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.full_name}
@@ -183,165 +179,320 @@ function Inner({ leadId }: { leadId: string }) {
                 ))}
               </Select>
             </Field>
-            <Field label="UTM source">
-              <Input value={l.utm_source ?? "—"} readOnly disabled />
+          </div>
+        </Section>
+
+        {/* CONTACT INFORMATION */}
+        <Section label="Contact information">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-3">
+            <Field label="Email">
+              <BlurEditable
+                value={l.email ?? ""}
+                placeholder="-"
+                onCommit={(v) => patch({ email: v || null })}
+              />
+            </Field>
+            <Field label="Phone">
+              <BlurEditable
+                value={l.phone ?? ""}
+                placeholder="-"
+                onCommit={(v) => patch({ phone: v || null })}
+              />
+            </Field>
+            <Field label="Instagram">
+              <BlurEditable
+                value={l.instagram ?? ""}
+                placeholder="-"
+                onCommit={(v) => patch({ instagram: v || null })}
+              />
+            </Field>
+            <Field label="Budget">
+              <BlurEditable
+                value={l.budget_cents != null ? formatCurrency(l.budget_cents) : ""}
+                placeholder="-"
+                onCommit={(v) => {
+                  const cleaned = v.replace(/[^0-9.]/g, "")
+                  if (!cleaned) return patch({ budget_cents: null })
+                  const cents = Math.round(parseFloat(cleaned) * 100)
+                  patch({ budget_cents: Number.isFinite(cents) ? cents : null })
+                }}
+              />
             </Field>
           </div>
         </Section>
 
-        <Section title="Notes">
-          <Textarea
-            rows={4}
-            value={(draft.notes as string | undefined) ?? l.notes ?? ""}
-            onChange={(e) => setField("notes", e.target.value || null)}
-          />
-        </Section>
-
-        <Section
-          title="Tags"
-          icon={<Tag className="h-3.5 w-3.5 text-[var(--color-muted-foreground)]" />}
-        >
-          <div className="flex flex-wrap gap-1.5">
-            {(allTags.data ?? []).map((t) => {
-              const active = currentTagIds.has(t.id)
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() =>
-                    toggleTag.mutate({ leadId: l.id, tagId: t.id, assign: !active })
-                  }
-                  className="cursor-pointer"
-                >
-                  <Badge
-                    variant={
-                      active
-                        ? (t.color as never)
-                        : "outline"
-                    }
-                  >
-                    {active ? "✓ " : ""}
-                    {t.name}
-                  </Badge>
-                </button>
-              )
-            })}
+        {/* CALL DETAILS */}
+        <Section label="Call details">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-3">
+            <Readout label="Source" value={l.source ?? "-"} />
+            <Readout
+              label="Booked at"
+              value={l.booked_at ? formatDateTime(l.booked_at) : "-"}
+            />
+            <Readout
+              label="Scheduled"
+              value={l.scheduled_at ? formatDateTime(l.scheduled_at) : "-"}
+            />
+            <Readout
+              label="Closed at"
+              value={l.closed_at ? formatDateTime(l.closed_at) : "-"}
+            />
           </div>
-        </Section>
-
-        <Section title="Log a call outcome">
-          <LogCallOutcomeForm leadId={l.id} closerId={l.closer_id} />
-        </Section>
-
-        <Section title="Call history">
-          {outcomes.isLoading ? (
-            <p className="text-xs text-[var(--color-muted-foreground)]">Loading…</p>
-          ) : !outcomes.data?.length ? (
-            <p className="text-xs text-[var(--color-muted-foreground)]">No call outcomes logged yet.</p>
-          ) : (
-            <ul className="flex flex-col gap-2">
-              {outcomes.data.map((oo) => (
-                <li
-                  key={oo.id}
-                  className="rounded-md border border-[var(--color-border)] p-3"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <Badge variant="muted" className="font-mono text-[10px]">
-                      {oo.result}
-                    </Badge>
-                    <span className="text-xs text-[var(--color-muted-foreground)]">
-                      {formatDateTime(oo.occurred_at ?? oo.created_at)}
-                    </span>
-                  </div>
-                  {oo.reason && (
-                    <div className="mt-1 text-xs">
-                      <span className="font-medium">Reason:</span> {oo.reason}
-                    </div>
-                  )}
-                  {oo.notes && (
-                    <div className="mt-1 text-xs text-[var(--color-muted-foreground)]">
-                      {oo.notes}
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
+          {(l.calendly_cancel_url || l.calendly_reschedule_url) && (
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              {l.calendly_cancel_url && (
+                <a href={l.calendly_cancel_url} target="_blank" rel="noreferrer">
+                  <Button variant="outline" className="w-full" type="button">
+                    <CalendarX className="h-4 w-4" />
+                    Cancel appointment
+                  </Button>
+                </a>
+              )}
+              {l.calendly_reschedule_url && (
+                <a href={l.calendly_reschedule_url} target="_blank" rel="noreferrer">
+                  <Button variant="outline" className="w-full" type="button">
+                    <CalendarClock className="h-4 w-4" />
+                    Reschedule
+                  </Button>
+                </a>
+              )}
+            </div>
           )}
         </Section>
 
-        <Section title="Activity">
-          {activities.isLoading ? (
-            <p className="text-xs text-[var(--color-muted-foreground)]">Loading…</p>
-          ) : !activities.data?.length ? (
-            <p className="text-xs text-[var(--color-muted-foreground)]">No activity yet.</p>
-          ) : (
-            <ul className="flex flex-col gap-1.5">
-              {activities.data.map((aa) => (
-                <li
-                  key={aa.id}
-                  className="flex items-center justify-between gap-2 text-xs"
-                >
-                  <code className="font-mono text-[var(--color-foreground)]">{aa.type}</code>
-                  <span className="text-[var(--color-muted-foreground)]">
-                    {formatDateTime(aa.created_at)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
+        {/* PAYMENTS */}
+        <PaymentsSection
+          leadId={l.id}
+          payments={(payments.data ?? []) as PaymentRow[]}
+          onChanged={() => qc.invalidateQueries({ queryKey: ["lead-payments", l.id] })}
+        />
+
+        {/* NOTES */}
+        <Section label="Notes">
+          <Textarea
+            rows={3}
+            placeholder="No notes added"
+            defaultValue={l.notes ?? ""}
+            onBlur={(e) => {
+              const v = e.target.value
+              if (v !== (l.notes ?? "")) patch({ notes: v || null })
+            }}
+          />
         </Section>
       </SheetBody>
 
       <SheetFooter>
-        {isDirty && (
-          <button
-            type="button"
-            className="mr-auto inline-flex items-center gap-1 text-xs text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]"
-            onClick={() => setDraft({})}
-          >
-            <X className="h-3 w-3" /> Discard changes
-          </button>
-        )}
-        <Button onClick={save} disabled={!isDirty || update.isPending}>
-          {update.isPending ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Save className="h-4 w-4" />
-          )}
-          Save changes
-        </Button>
+        <button
+          type="button"
+          onClick={deleteLead}
+          className="inline-flex items-center gap-1.5 text-xs text-[var(--color-destructive)] hover:underline"
+        >
+          <Trash2 className="h-3.5 w-3.5" /> Delete this lead
+        </button>
       </SheetFooter>
     </>
   )
 }
 
+interface PaymentRow {
+  id: string
+  amount_cents: number
+  currency: string
+  paid_at: string
+  source: string
+  is_refund: boolean
+  notes: string | null
+}
+
+function PaymentsSection({
+  leadId,
+  payments,
+  onChanged,
+}: {
+  leadId: string
+  payments: PaymentRow[]
+  onChanged: () => void
+}) {
+  const add = useAddPayment()
+  const [adding, setAdding] = React.useState(false)
+  const [amount, setAmount] = React.useState("")
+  const [notes, setNotes] = React.useState("")
+
+  const total = payments.reduce(
+    (sum, p) => sum + (p.is_refund ? -p.amount_cents : p.amount_cents),
+    0
+  )
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    const cents = Math.round(parseFloat(amount) * 100)
+    if (!Number.isFinite(cents) || cents <= 0) return
+    await add.mutateAsync({
+      leadId,
+      amount_cents: cents,
+      notes: notes.trim() || null,
+    })
+    setAmount("")
+    setNotes("")
+    setAdding(false)
+    onChanged()
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted-foreground)]">
+          Payments
+        </span>
+        <span className="text-sm font-semibold tabular-nums">
+          {formatCurrency(total)}
+        </span>
+      </div>
+
+      {!adding && (
+        <button
+          type="button"
+          onClick={() => setAdding(true)}
+          className="inline-flex items-center justify-center gap-1 rounded-md py-2 text-xs font-medium text-[var(--color-primary)] hover:underline"
+        >
+          <Plus className="h-3.5 w-3.5" /> Add payment
+        </button>
+      )}
+
+      {adding && (
+        <form onSubmit={submit} className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] p-3">
+          <div className="grid grid-cols-2 gap-2">
+            <Input
+              type="number"
+              step="0.01"
+              min="0"
+              placeholder="Amount (EUR)"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              autoFocus
+            />
+            <Input
+              placeholder="Notes (optional)"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+            />
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" variant="ghost" size="sm" onClick={() => setAdding(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" size="sm" disabled={add.isPending}>
+              {add.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Save payment
+            </Button>
+          </div>
+        </form>
+      )}
+
+      {payments.length === 0 && !adding && (
+        <p className="text-center text-xs text-[var(--color-muted-foreground)]">
+          No payments recorded
+        </p>
+      )}
+
+      {payments.length > 0 && (
+        <ul className="flex flex-col divide-y divide-[var(--color-border)] rounded-md border border-[var(--color-border)]">
+          {payments.map((p) => (
+            <li key={p.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+              <div className="flex flex-col">
+                <span className="font-medium tabular-nums">
+                  {p.is_refund ? "-" : ""}
+                  {formatCurrency(Math.abs(p.amount_cents))}
+                </span>
+                {p.notes && (
+                  <span className="text-xs text-[var(--color-muted-foreground)]">{p.notes}</span>
+                )}
+              </div>
+              <div className="flex flex-col items-end">
+                <span className="text-xs text-[var(--color-muted-foreground)]">
+                  {formatDateTime(p.paid_at)}
+                </span>
+                <span className="text-[10px] uppercase tracking-wider text-[var(--color-muted-foreground)]">
+                  {p.source}
+                </span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 function Section({
-  title,
-  icon,
+  label,
   children,
 }: {
-  title: string
-  icon?: React.ReactNode
+  label: string
   children: React.ReactNode
 }) {
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-1.5">
-        {icon}
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-muted-foreground)]">
-          {title}
-        </h3>
-      </div>
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted-foreground)]">
+        {label}
+      </span>
       {children}
     </div>
   )
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  children,
+}: {
+  label: string
+  children: React.ReactNode
+}) {
   return (
     <div className="flex flex-col gap-1">
-      <Label className="text-xs">{label}</Label>
+      <span className="text-xs text-[var(--color-muted-foreground)]">{label}</span>
       {children}
     </div>
+  )
+}
+
+function Readout({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-xs text-[var(--color-muted-foreground)]">{label}</span>
+      <span className="text-sm">{value}</span>
+    </div>
+  )
+}
+
+/** A field that edits in place, commits on blur or Enter. */
+function BlurEditable({
+  value,
+  placeholder,
+  onCommit,
+}: {
+  value: string
+  placeholder?: string
+  onCommit: (v: string) => void
+}) {
+  const [local, setLocal] = React.useState(value)
+  React.useEffect(() => setLocal(value), [value])
+  return (
+    <Input
+      value={local}
+      placeholder={placeholder}
+      onChange={(e) => setLocal(e.target.value)}
+      onBlur={() => {
+        if (local !== value) onCommit(local)
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur()
+        if (e.key === "Escape") {
+          setLocal(value)
+          ;(e.target as HTMLInputElement).blur()
+        }
+      }}
+      className="border-transparent bg-transparent px-0 shadow-none focus-visible:border-[var(--color-input)] focus-visible:bg-[var(--color-background)] focus-visible:px-3"
+    />
   )
 }

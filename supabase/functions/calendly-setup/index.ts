@@ -224,30 +224,24 @@ serve(async (req) => {
     signing_key: (resource.signing_key as string | undefined) ?? deepFindSigningKey(responseAny),
   }
 
-  if (!sub.signing_key) {
-    // Log the full Calendly response so the admin can inspect it (admin-only via RLS).
+  // Calendly's Standard tier creates the webhook but doesn't return a
+  // signing_key (signing is a Premium-tier feature). When that happens we still
+  // accept the connection; the webhook receiver falls back to "no signature
+  // verification" mode and relies on the URL being secret + payload-shape
+  // sanity checks. Document this clearly to the admin.
+  const signingDisabled = !sub.signing_key
+
+  if (signingDisabled) {
     await logIntegration(supabase, {
       provider: "calendly",
       direction: "outbound",
-      event_type: "setup.create_subscription",
-      status: "failed",
+      event_type: "setup.no_signing_key",
+      status: "success",
       request_payload: { url: callbackUrl, organization: orgUri } as never,
       response_payload: responseAny as never,
-      error: "Calendly response missing signing_key",
+      error:
+        "Calendly response missing signing_key — Standard tier doesn't include webhook signing. Proceeding without HMAC verification.",
     })
-    return jsonResponse(
-      {
-        error:
-          "Calendly created the webhook but didn't return a signing key. " +
-          "The full response has been logged to integrations_log for inspection. " +
-          "Most common cause: PAT scope or account plan doesn't include webhook signing. " +
-          "Check Calendly → API & Webhooks → Personal access tokens scopes, or contact Calendly support.",
-        subscription_uri: sub.uri,
-        response_keys: Object.keys(responseAny),
-        resource_keys: Object.keys(resource),
-      },
-      { status: 502 }
-    )
   }
 
   // 5. Persist into integration_configs.
@@ -262,7 +256,8 @@ serve(async (req) => {
         last_synced_at: new Date().toISOString(),
         config: {
           personal_access_token: pat,
-          signing_key: sub.signing_key,
+          signing_key: sub.signing_key ?? null,
+          signing_disabled: signingDisabled,
           subscription_uri: sub.uri,
           organization_uri: orgUri,
           user_uri: userUri,
@@ -281,7 +276,7 @@ serve(async (req) => {
     event_type: "setup.complete",
     status: "success",
     request_payload: { account_email: accountEmail, organization: orgUri } as never,
-    response_payload: { subscription_uri: sub.uri } as never,
+    response_payload: { subscription_uri: sub.uri, signing_disabled: signingDisabled } as never,
   })
 
   return jsonResponse({
@@ -290,5 +285,9 @@ serve(async (req) => {
     subscription_uri: sub.uri,
     callback_url: callbackUrl,
     events: sub.events,
+    signing_disabled: signingDisabled,
+    warning: signingDisabled
+      ? "Calendly Standard doesn't return a webhook signing key, so signature verification is disabled. Bookings will still flow into the CRM. To enable HMAC verification, upgrade to a Calendly tier that supports it."
+      : null,
   })
 })

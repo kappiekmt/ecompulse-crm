@@ -82,8 +82,22 @@ serve(async (req) => {
 
   const config = await getIntegrationConfig(supabase, "calendly")
   const signingKey = config?.signing_key ?? null
+  const signingDisabled = config?.signing_disabled === "true" || config?.signing_disabled === true
 
-  if (!(await verifySignature(req, body, signingKey))) {
+  if (signingDisabled) {
+    // Calendly Standard tier doesn't issue signing keys. We accept the event
+    // without HMAC verification — the URL is secret and we sanity-check the
+    // payload shape later. Log every accepted unsigned event so admins can
+    // audit what came through.
+    await logIntegration(supabase, {
+      provider: "calendly",
+      direction: "inbound",
+      event_type: "unsigned_accepted",
+      status: "success",
+      request_payload: body.slice(0, 1000),
+      error: "Accepted without signature verification (signing_disabled=true)",
+    })
+  } else if (!(await verifySignature(req, body, signingKey))) {
     await logIntegration(supabase, {
       provider: "calendly",
       direction: "inbound",

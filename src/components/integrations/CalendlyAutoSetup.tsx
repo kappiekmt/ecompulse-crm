@@ -20,6 +20,8 @@ interface SetupResult {
   subscription_uri?: string
   callback_url?: string
   events?: string[]
+  signing_disabled?: boolean
+  warning?: string | null
   error?: string
 }
 
@@ -129,15 +131,39 @@ export function CalendlyAutoSetup({ savedConfig, onSetupComplete }: CalendlyAuto
       </div>
 
       {result?.ok && (
-        <div className="flex items-start gap-2 rounded-md border border-[var(--color-success)]/30 bg-[var(--color-success)]/10 p-3 text-xs">
-          <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-success)]" />
-          <div className="flex flex-col gap-0.5">
-            <span className="font-medium">Connected as {result.account_email}.</span>
-            <span className="text-[var(--color-muted-foreground)]">
-              New Calendly bookings will land in /leads automatically. Cancellations flip the
-              lead to "cancelled".
-            </span>
+        <div className="flex flex-col gap-2">
+          <div className="flex items-start gap-2 rounded-md border border-[var(--color-success)]/30 bg-[var(--color-success)]/10 p-3 text-xs">
+            <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-success)]" />
+            <div className="flex flex-col gap-0.5">
+              <span className="font-medium">Connected as {result.account_email}.</span>
+              <span className="text-[var(--color-muted-foreground)]">
+                New Calendly bookings will land in /leads automatically. Cancellations flip the
+                lead to "cancelled".
+              </span>
+            </div>
           </div>
+          {result.signing_disabled && (
+            <div className="flex items-start gap-2 rounded-md border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 p-3 text-xs">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-warning)]" />
+              <div className="flex flex-col gap-0.5">
+                <span className="font-medium">HMAC signature verification disabled.</span>
+                <span className="text-[var(--color-muted-foreground)]">
+                  {result.warning ??
+                    "Calendly Standard doesn't issue webhook signing keys. Bookings still flow in, but they're accepted without cryptographic signature verification. Upgrade Calendly to enable signing."}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {savedConfig?.signing_disabled === "true" && !result && (
+        <div className="flex items-start gap-2 rounded-md border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 p-3 text-xs">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-warning)]" />
+          <span>
+            Connected without HMAC verification (Calendly Standard plan).
+            Webhook events are accepted based on the URL alone.
+          </span>
         </div>
       )}
 

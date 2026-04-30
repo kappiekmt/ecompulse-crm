@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { CopyableUrl } from "@/components/integrations/CopyableUrl"
+import { CalendlyAutoSetup } from "@/components/integrations/CalendlyAutoSetup"
 import { supabase } from "@/lib/supabase"
 import { cn } from "@/lib/utils"
 import { type IntegrationSpec, webhookUrlFor } from "@/lib/integrations"
@@ -109,6 +110,9 @@ export function IntegrationCardItem({
 
       {open && (hasFields || webhookUrl) && (
         <div className="flex flex-col gap-4 border-t border-[var(--color-border)] bg-[var(--color-muted)]/30 p-5">
+          {spec.provider === "calendly" && (
+            <CalendlyAutoSetup savedConfig={savedConfig} onSetupComplete={onSaved} />
+          )}
           {webhookUrl && (
             <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] p-4">
               <div className="flex items-center justify-between gap-2">

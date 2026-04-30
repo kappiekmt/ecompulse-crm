@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Loader2, Plus, Search } from "lucide-react"
+import { CheckCircle2, Loader2, Plus, Search } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -179,7 +179,16 @@ export function Leads() {
                         onClick={() => setActiveId(l.id)}
                         className="cursor-pointer hover:bg-[var(--color-muted)]/40"
                       >
-                        <td className="px-4 py-3 font-medium">{l.full_name}</td>
+                        <td className="px-4 py-3 font-medium">
+                          <div className="flex items-center gap-1.5">
+                            {l.pre_call_started && (
+                              <span title="Pre-call started" className="inline-flex">
+                                <CheckCircle2 className="h-3.5 w-3.5 text-[var(--color-success)]" />
+                              </span>
+                            )}
+                            {l.full_name}
+                          </div>
+                        </td>
                         <td className="px-4 py-3">
                           <div className="flex flex-col text-xs leading-tight">
                             <span>{l.email ?? "—"}</span>

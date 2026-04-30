@@ -6,7 +6,7 @@ export interface WebhookEventDef {
   key: string
   displayName: string
   description: string
-  group: "lead" | "call" | "payment" | "deal"
+  group: "lead" | "call" | "payment" | "deal" | "reminder"
 }
 
 export const WEBHOOK_EVENTS: WebhookEventDef[] = [
@@ -57,6 +57,13 @@ export const WEBHOOK_EVENTS: WebhookEventDef[] = [
     displayName: "Deal lost",
     description: "A deal is marked lost with a reason.",
     group: "deal",
+  },
+  {
+    key: "pre_call.reminder",
+    displayName: "Pre-call reminder (T-15)",
+    description:
+      "Fires 15 minutes before each scheduled call. Payload includes lead, closer, scheduled time (UTC + closer-local), and pre_call_started status.",
+    group: "reminder",
   },
 ]
 

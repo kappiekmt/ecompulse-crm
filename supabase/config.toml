@@ -20,3 +20,8 @@ verify_jwt = false
 # Auth is enforced inside the function.
 [functions.eod-report]
 verify_jwt = false
+
+# Reminder dispatcher — JWT enforced by gateway, role check inline.
+# pg_cron calls it every minute with the project's service_role JWT.
+[functions.dispatch-reminders]
+verify_jwt = true

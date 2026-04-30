@@ -134,8 +134,10 @@ serve(async (req) => {
   const accountEmail = meResp.data.resource.email
 
   // 2. List existing org-scoped webhook subscriptions.
+  // Calendly's GET /webhook_subscriptions with scope=organization rejects the
+  // `user` query param. Only pass `user` when scope=user.
   const callbackUrl = "https://coaching.joinecompulse.com/api/webhooks/calendly"
-  const listPath = `/webhook_subscriptions?organization=${encodeURIComponent(orgUri)}&user=${encodeURIComponent(userUri)}&scope=organization`
+  const listPath = `/webhook_subscriptions?organization=${encodeURIComponent(orgUri)}&scope=organization`
   const listResp = await calendlyApi<{ collection: CalendlySubscription[] }>(
     "GET",
     listPath,

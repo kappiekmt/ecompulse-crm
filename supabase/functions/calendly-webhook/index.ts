@@ -496,7 +496,23 @@ function buildCreatedMessage(args: BookingSlackArgs, closerLine: string, _schedu
     })
   }
 
-  const blocks: Record<string, unknown>[] = [
+  const closerMentionTag = slackMention(args.closerSlackId)
+
+  const blocks: Record<string, unknown>[] = []
+
+  // Lead with the @-mention so Slack actually notifies the closer.
+  // Only include if we have a Slack ID, otherwise it's just clutter.
+  if (closerMentionTag) {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `${closerMentionTag} — you've got a new call 📅`,
+      },
+    })
+  }
+
+  blocks.push(
     {
       type: "section",
       text: {
@@ -504,8 +520,8 @@ function buildCreatedMessage(args: BookingSlackArgs, closerLine: string, _schedu
         text: `📅  *Call booked · ${firstName}*`,
       },
     },
-    { type: "section", fields },
-  ]
+    { type: "section", fields }
+  )
 
   if (actions.length > 0) {
     // Slack actions blocks support up to 25 elements, but practically 5 looks best.

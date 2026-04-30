@@ -12,6 +12,7 @@ import Stripe from "https://esm.sh/stripe@14?target=deno"
 import { corsHeaders } from "../_shared/cors.ts"
 import { adminClient, getIntegrationConfig, logIntegration } from "../_shared/supabase-admin.ts"
 import { dispatchEvent } from "../_shared/dispatch.ts"
+import { resolveCoachingTier } from "../_shared/coaching-tier.ts"
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
@@ -66,6 +67,24 @@ serve(async (req) => {
         const customerId =
           typeof session.customer === "string" ? session.customer : session.customer?.id ?? null
 
+        // Resolve coaching tier from Stripe metadata, payment-link / line-item
+        // descriptions. Stays stable across PIF + installment variants.
+        let lineItemNames: string[] = []
+        try {
+          const items = await stripe.checkout.sessions.listLineItems(session.id, { limit: 10 })
+          lineItemNames = items.data.flatMap((it) => [
+            it.description ?? null,
+            typeof it.price?.product === "string" ? null : it.price?.product?.name ?? null,
+          ].filter((s): s is string => !!s))
+        } catch (err) {
+          console.warn("[stripe] could not list line items", (err as Error).message)
+        }
+        const coachingTier = resolveCoachingTier(
+          (session.metadata?.tier as string | undefined) ?? null,
+          (session.metadata?.program as string | undefined) ?? null,
+          ...lineItemNames,
+        )
+
         let leadId: string | null = null
         if (email) {
           const { data } = await supabase
@@ -87,6 +106,7 @@ serve(async (req) => {
             .insert({
               lead_id: leadId,
               program: (session.metadata?.program as string | undefined) ?? "default",
+              coaching_tier: coachingTier,
               amount_cents: amount,
               currency,
               stripe_customer_id: customerId,
@@ -142,6 +162,7 @@ serve(async (req) => {
           data: {
             lead_id: leadId,
             program: (session.metadata?.program as string | undefined) ?? "default",
+            coaching_tier: coachingTier,
             amount_cents: amount,
             currency,
           },

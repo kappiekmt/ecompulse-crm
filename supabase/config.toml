@@ -15,3 +15,8 @@ verify_jwt = false
 
 [functions.public-api]
 verify_jwt = false
+
+# EOD report — accepts either a service-role token (pg_cron) or an admin user JWT.
+# Auth is enforced inside the function.
+[functions.eod-report]
+verify_jwt = false

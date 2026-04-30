@@ -1,7 +1,9 @@
 import * as React from "react"
-import { FileBarChart, Send } from "lucide-react"
+import { FileBarChart, Loader2, Send } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { StatCard } from "@/components/StatCard"
+import { supabase } from "@/lib/supabase"
+import { cn } from "@/lib/utils"
 import {
   DateRangeFilter,
   type DateRangeKey,
@@ -26,6 +28,43 @@ export function Dashboard() {
   const [range, setRange] = React.useState<DateRangeKey>("all")
   const [closer, setCloser] = React.useState("")
   const [setter, setSetter] = React.useState("")
+
+  const [eodSending, setEodSending] = React.useState(false)
+  const [eodMsg, setEodMsg] = React.useState<{ ok: boolean; text: string } | null>(null)
+
+  async function sendEod() {
+    setEodSending(true)
+    setEodMsg(null)
+    try {
+      const { data: sess } = await supabase.auth.getSession()
+      const jwt = sess.session?.access_token
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/eod-report`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${jwt}`,
+          },
+          body: JSON.stringify({ test: true }),
+        }
+      )
+      const json = await res.json()
+      if (json.ok) {
+        setEodMsg({ ok: true, text: `✓ Sent to Slack (${json.date})` })
+      } else {
+        setEodMsg({
+          ok: false,
+          text: `✗ ${json.error ?? "Failed"}`,
+        })
+      }
+    } catch (err) {
+      setEodMsg({ ok: false, text: `✗ ${(err as Error).message}` })
+    } finally {
+      setEodSending(false)
+      setTimeout(() => setEodMsg(null), 6000)
+    }
+  }
 
   const kpi = useKpiSnapshot()
   const daily = useDailyMetrics()
@@ -85,8 +124,25 @@ export function Dashboard() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button>
-            <Send className="h-4 w-4" /> Send Team EOD
+          {eodMsg && (
+            <span
+              className={cn(
+                "text-xs font-medium",
+                eodMsg.ok
+                  ? "text-[var(--color-success)]"
+                  : "text-[var(--color-destructive)]"
+              )}
+            >
+              {eodMsg.text}
+            </span>
+          )}
+          <Button onClick={sendEod} disabled={eodSending}>
+            {eodSending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Send className="h-4 w-4" />
+            )}
+            Send Team EOD
           </Button>
           <Button variant="outline">
             <FileBarChart className="h-4 w-4" /> Full Report

@@ -5,10 +5,11 @@
 // dashboard without the CLI. When you eventually move to CLI-based deploys,
 // use supabase/functions/slack-app/index.ts (the modular version) instead.
 //
-// Routes (sub-paths after /slack-app):
-//   /commands       — slash commands (/lead, /note, /student-status)
-//   /events         — Events API (url_verification, app_mention)
-//   /interactivity  — button clicks, modal submits (stub)
+// Single endpoint dispatches by body shape — Slack can point all three
+// integration types (slash commands, events, interactivity) at the same URL:
+//   - JSON with `type` field         → Events API
+//   - form-encoded with `command`    → slash command
+//   - form-encoded with `payload`    → interactivity (buttons/modals)
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts"
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2"
@@ -240,16 +241,7 @@ async function handleStudentStatus(p: SlashPayload) {
   })
 }
 
-async function handleSlashCommand(req: Request): Promise<Response> {
-  const rawBody = await req.text()
-  const valid = await verifySlackSignature(
-    rawBody,
-    req.headers.get("x-slack-request-timestamp"),
-    req.headers.get("x-slack-signature"),
-  )
-  if (!valid) return new Response("invalid signature", { status: 401 })
-
-  const form = parseForm(rawBody) as unknown as SlashPayload
+async function handleSlashCommand(form: SlashPayload): Promise<Response> {
   try {
     switch (form.command) {
       case "/lead": return await handleLead(form)
@@ -330,31 +322,17 @@ async function handleAppMention(event: { user: string; channel: string; text: st
   })
 }
 
-async function handleEvents(req: Request): Promise<Response> {
-  const rawBody = await req.text()
-  const ts = req.headers.get("x-slack-request-timestamp")
-  const sig = req.headers.get("x-slack-signature")
-  const valid = await verifySlackSignature(rawBody, ts, sig)
-
-  let payload: {
-    type: string
-    challenge?: string
-    event?: { type: string; user: string; channel: string; text: string; ts: string }
-  }
-  try {
-    payload = JSON.parse(rawBody)
-  } catch {
-    return new Response("bad json", { status: 400 })
-  }
-
-  // url_verification is the one-time setup challenge from Slack. We let it
-  // through even on signature failure so we can surface the underlying issue
-  // in logs. All other event types still require a valid signature.
+async function handleEventsPayload(payload: {
+  type: string
+  challenge?: string
+  event?: { type: string; user: string; channel: string; text: string; ts: string }
+}, signatureValid: boolean): Promise<Response> {
+  // url_verification is the one-time setup challenge. We let it through even
+  // if signature verification fails so the misconfiguration is visible in the
+  // function logs rather than just a generic Slack "didn't respond" error.
   if (payload.type === "url_verification") {
-    if (!valid) {
+    if (!signatureValid) {
       console.warn("[slack-app] url_verification with bad signature", {
-        hasTs: !!ts,
-        hasSig: !!sig,
         hasSecret: !!SIGNING_SECRET,
         secretLen: SIGNING_SECRET.length,
       })
@@ -362,7 +340,7 @@ async function handleEvents(req: Request): Promise<Response> {
     return new Response(payload.challenge ?? "", { headers: { "Content-Type": "text/plain" } })
   }
 
-  if (!valid) return new Response("invalid signature", { status: 401 })
+  if (!signatureValid) return new Response("invalid signature", { status: 401 })
 
   if (payload.type === "event_callback" && payload.event?.type === "app_mention") {
     queueMicrotask(() => handleAppMention(payload.event!).catch((e) => console.error(e)))
@@ -370,26 +348,51 @@ async function handleEvents(req: Request): Promise<Response> {
   return new Response("", { status: 200 })
 }
 
-async function handleInteractivity(req: Request): Promise<Response> {
-  const rawBody = await req.text()
-  const valid = await verifySlackSignature(
-    rawBody,
-    req.headers.get("x-slack-request-timestamp"),
-    req.headers.get("x-slack-signature"),
-  )
-  if (!valid) return new Response("invalid signature", { status: 401 })
-
-  console.log("[slack-app] interactivity received")
-  return new Response("", { status: 200 })
-}
-
 // ---------- Router ----------
+//
+// One URL handles all three Slack inbound types — we dispatch by inspecting
+// the body. This avoids any dependence on how Supabase routes sub-paths
+// for dashboard-deployed functions.
 
 serve(async (req) => {
+  if (req.method === "GET") return new Response("slack-app ok", { status: 200 })
   if (req.method !== "POST") return new Response("Method not allowed", { status: 405 })
-  const path = new URL(req.url).pathname
-  if (path.endsWith("/commands")) return await handleSlashCommand(req)
-  if (path.endsWith("/events")) return await handleEvents(req)
-  if (path.endsWith("/interactivity")) return await handleInteractivity(req)
-  return new Response("not found", { status: 404 })
+
+  const rawBody = await req.text()
+  const ts = req.headers.get("x-slack-request-timestamp")
+  const sig = req.headers.get("x-slack-signature")
+  const signatureValid = await verifySlackSignature(rawBody, ts, sig)
+
+  const contentType = req.headers.get("content-type") ?? ""
+
+  // Events API — JSON body with a `type` field.
+  if (contentType.includes("application/json")) {
+    try {
+      const payload = JSON.parse(rawBody)
+      return await handleEventsPayload(payload, signatureValid)
+    } catch {
+      return new Response("bad json", { status: 400 })
+    }
+  }
+
+  // Slash commands + interactivity arrive form-encoded.
+  if (contentType.includes("application/x-www-form-urlencoded")) {
+    if (!signatureValid) return new Response("invalid signature", { status: 401 })
+    const form = parseForm(rawBody)
+
+    // Interactivity payloads come as form field "payload" containing JSON.
+    if (form.payload) {
+      console.log("[slack-app] interactivity received")
+      return new Response("", { status: 200 })
+    }
+
+    // Slash commands have a `command` field like "/lead".
+    if (form.command) {
+      return await handleSlashCommand(form as unknown as SlashPayload)
+    }
+
+    return new Response("unknown form payload", { status: 400 })
+  }
+
+  return new Response("unsupported content-type", { status: 415 })
 })

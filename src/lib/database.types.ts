@@ -195,16 +195,27 @@ export interface Database {
       }>
       sops: Tbl<{
         id: string
+        slug: string | null
         category: string
         title: string
+        description: string | null
         body_md: string
         visible_to: TeamRole[]
         version: number
         is_archived: boolean
+        pinned_for_onboarding: boolean
+        display_order: number
+        read_time_minutes: number | null
         created_by: string | null
         updated_by: string | null
         created_at: string
         updated_at: string
+      }>
+      sop_reads: Tbl<{
+        id: string
+        sop_id: string
+        team_member_id: string
+        read_at: string
       }>
       call_outcomes: Tbl<{
         id: string

@@ -43,6 +43,28 @@ function jsonResponse(body: unknown, init: ResponseInit = {}) {
   })
 }
 
+/**
+ * Recursively walks an arbitrary JSON value and returns the first string value
+ * found at any key matching /signing.?key/i. Defensive in case Calendly nests
+ * the field one level deeper than expected.
+ */
+function deepFindSigningKey(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const r = deepFindSigningKey(item)
+      if (r) return r
+    }
+    return undefined
+  }
+  for (const [k, v] of Object.entries(value)) {
+    if (/signing.?key/i.test(k) && typeof v === "string" && v) return v
+    const r = deepFindSigningKey(v)
+    if (r) return r
+  }
+  return undefined
+}
+
 async function calendlyApi<T>(
   method: "GET" | "POST" | "DELETE",
   path: string,
@@ -159,7 +181,7 @@ serve(async (req) => {
   }
 
   // 4. Create a new subscription.
-  const createResp = await calendlyApi<{ resource: CalendlySubscription }>(
+  const createResp = await calendlyApi<Record<string, unknown>>(
     "POST",
     "/webhook_subscriptions",
     pat,
@@ -185,10 +207,45 @@ serve(async (req) => {
       { status: 502 }
     )
   }
-  const sub = createResp.data.resource
+
+  // Calendly's response shape has occasionally been observed in two forms:
+  //   { "resource": { "signing_key": "...", "uri": "..." } }
+  //   { "signing_key": "...", "uri": "..." }
+  // Probe both and fall back to a deep search for any "signing_key" field so
+  // we don't flake on minor response-shape changes.
+  const responseAny = createResp.data as Record<string, unknown>
+  const resource = (responseAny.resource ?? responseAny) as Record<string, unknown>
+  const sub: CalendlySubscription = {
+    uri: String(resource.uri ?? ""),
+    callback_url: String(resource.callback_url ?? callbackUrl),
+    events: (resource.events as string[]) ?? [],
+    scope: (resource.scope as "organization" | "user") ?? "organization",
+    state: (resource.state as "active" | "disabled") ?? "active",
+    signing_key: (resource.signing_key as string | undefined) ?? deepFindSigningKey(responseAny),
+  }
+
   if (!sub.signing_key) {
+    // Log the full Calendly response so the admin can inspect it (admin-only via RLS).
+    await logIntegration(supabase, {
+      provider: "calendly",
+      direction: "outbound",
+      event_type: "setup.create_subscription",
+      status: "failed",
+      request_payload: { url: callbackUrl, organization: orgUri } as never,
+      response_payload: responseAny as never,
+      error: "Calendly response missing signing_key",
+    })
     return jsonResponse(
-      { error: "Calendly created the webhook but didn't return a signing key." },
+      {
+        error:
+          "Calendly created the webhook but didn't return a signing key. " +
+          "The full response has been logged to integrations_log for inspection. " +
+          "Most common cause: PAT scope or account plan doesn't include webhook signing. " +
+          "Check Calendly → API & Webhooks → Personal access tokens scopes, or contact Calendly support.",
+        subscription_uri: sub.uri,
+        response_keys: Object.keys(responseAny),
+        resource_keys: Object.keys(resource),
+      },
       { status: 502 }
     )
   }

@@ -5,11 +5,11 @@
 // dashboard without the CLI. When you eventually move to CLI-based deploys,
 // use supabase/functions/slack-app/index.ts (the modular version) instead.
 //
-// Single endpoint dispatches by body shape — Slack can point all three
-// integration types (slash commands, events, interactivity) at the same URL:
-//   - JSON with `type` field         → Events API
-//   - form-encoded with `command`    → slash command
-//   - form-encoded with `payload`    → interactivity (buttons/modals)
+// Single endpoint dispatches by body shape:
+//   - JSON, body has `event` field         → CRM internal event (HMAC-signed)
+//   - JSON, body has `type` field          → Slack Events API
+//   - form-encoded with `command`          → Slack slash command
+//   - form-encoded with `payload`          → Slack interactivity
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts"
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2"
@@ -18,6 +18,10 @@ const SIGNING_SECRET = Deno.env.get("SLACK_SIGNING_SECRET") ?? ""
 const BOT_TOKEN = Deno.env.get("SLACK_BOT_TOKEN") ?? ""
 const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? ""
 const PUBLIC_APP_URL = Deno.env.get("PUBLIC_APP_URL") ?? "https://coaching.joinecompulse.com"
+
+const CRM_WEBHOOK_SECRET = Deno.env.get("CRM_WEBHOOK_SECRET") ?? ""
+const CHANNEL_WINS = Deno.env.get("SLACK_CHANNEL_WINS") ?? "#wins"
+const CHANNEL_FINANCE = Deno.env.get("SLACK_CHANNEL_FINANCE") ?? "#finance-alerts"
 
 // ---------- Supabase admin ----------
 
@@ -581,6 +585,179 @@ async function handleAppMention(event: { user: string; channel: string; text: st
   })
 }
 
+// ---------- CRM internal events (from dispatchEvent / webhook_subscriptions) ----------
+
+async function verifyCrmSignature(rawBody: string, signature: string | null): Promise<boolean> {
+  if (!CRM_WEBHOOK_SECRET) return true            // unsigned mode for setup
+  if (!signature) return false
+  const sig = signature.replace(/^sha256=/, "")
+  const key = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(CRM_WEBHOOK_SECRET),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  )
+  const mac = await crypto.subtle.sign("HMAC", key, enc.encode(rawBody))
+  const expected = Array.from(new Uint8Array(mac))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
+  return timingSafeEqual(enc.encode(sig), enc.encode(expected))
+}
+
+interface CrmEvent {
+  event: string
+  event_id: string
+  occurred_at: string
+  data: Record<string, unknown>
+}
+
+async function handlePaymentReceived(data: Record<string, unknown>) {
+  const supabase = adminClient()
+  const leadId = data.lead_id as string | null
+  const amountCents = (data.amount_cents as number) ?? 0
+  const currency = (data.currency as string) ?? "EUR"
+
+  let leadName = "(unknown lead)"
+  let leadEmail = (data.email as string | null) ?? null
+  let coachingTier: string | null = null
+  let closer: string | null = null
+
+  if (leadId) {
+    const [leadRes, dealRes] = await Promise.all([
+      supabase
+        .from("leads")
+        .select("full_name, email, closer:team_members!leads_closer_id_fkey(full_name)")
+        .eq("id", leadId)
+        .maybeSingle(),
+      supabase
+        .from("deals")
+        .select("coaching_tier, program")
+        .eq("lead_id", leadId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ])
+    if (leadRes.data) {
+      leadName = (leadRes.data.full_name as string) ?? leadName
+      leadEmail = (leadRes.data.email as string) ?? leadEmail
+      const c = leadRes.data.closer as { full_name?: string } | null
+      closer = c?.full_name ?? null
+    }
+    if (dealRes.data) {
+      coachingTier = (dealRes.data.coaching_tier as string) ?? null
+    }
+  }
+
+  await postMessage({
+    channel: CHANNEL_WINS,
+    text: `💰 ${leadName} paid ${fmtMoney(amountCents, currency)}`,
+    blocks: [
+      {
+        type: "header",
+        text: { type: "plain_text", text: `💰 New payment — ${fmtMoney(amountCents, currency)}` },
+      },
+      {
+        type: "section",
+        fields: [
+          { type: "mrkdwn", text: `*Lead:*\n${leadName}` },
+          { type: "mrkdwn", text: `*Email:*\n${leadEmail ?? "—"}` },
+          { type: "mrkdwn", text: `*Tier:*\n${coachingTier ? `\`${coachingTier}\`` : "—"}` },
+          { type: "mrkdwn", text: `*Closer:*\n${closer ?? "—"}` },
+        ],
+      },
+      leadId ? {
+        type: "actions",
+        elements: [{
+          type: "button",
+          text: { type: "plain_text", text: "Open in CRM" },
+          url: `${PUBLIC_APP_URL}/leads?id=${leadId}`,
+          style: "primary",
+        }],
+      } : null,
+    ].filter(Boolean) as unknown[],
+  })
+}
+
+async function handlePaymentRefunded(data: Record<string, unknown>) {
+  const supabase = adminClient()
+  const piId = data.stripe_payment_intent_id as string | null
+  const amount = (data.amount_refunded_cents as number) ?? 0
+  const currency = (data.currency as string) ?? "EUR"
+
+  let leadName = "(unknown lead)"
+  let leadId: string | null = null
+  let closer: string | null = null
+  let dealProgram: string | null = null
+
+  if (piId) {
+    const { data: deal } = await supabase
+      .from("deals")
+      .select("lead_id, program, lead:leads(full_name, closer:team_members!leads_closer_id_fkey(full_name))")
+      .eq("stripe_payment_intent_id", piId)
+      .maybeSingle()
+    if (deal) {
+      leadId = deal.lead_id as string
+      dealProgram = deal.program as string
+      const lead = deal.lead as { full_name?: string; closer?: { full_name?: string } } | null
+      leadName = lead?.full_name ?? leadName
+      closer = lead?.closer?.full_name ?? null
+    }
+  }
+
+  await postMessage({
+    channel: CHANNEL_FINANCE,
+    text: `🚨 ${leadName} refunded ${fmtMoney(amount, currency)}`,
+    blocks: [
+      {
+        type: "header",
+        text: { type: "plain_text", text: `🚨 Refund — ${fmtMoney(amount, currency)}` },
+      },
+      {
+        type: "section",
+        fields: [
+          { type: "mrkdwn", text: `*Lead:*\n${leadName}` },
+          { type: "mrkdwn", text: `*Program:*\n${dealProgram ?? "—"}` },
+          { type: "mrkdwn", text: `*Closer:*\n${closer ?? "—"}` },
+          { type: "mrkdwn", text: `*Stripe PI:*\n\`${piId ?? "—"}\`` },
+        ],
+      },
+      leadId ? {
+        type: "actions",
+        elements: [{
+          type: "button",
+          text: { type: "plain_text", text: "Open in CRM" },
+          url: `${PUBLIC_APP_URL}/leads?id=${leadId}`,
+        }],
+      } : null,
+    ].filter(Boolean) as unknown[],
+  })
+}
+
+async function handleCrmEvent(payload: CrmEvent): Promise<Response> {
+  try {
+    switch (payload.event) {
+      case "payment.received":
+        await handlePaymentReceived(payload.data)
+        break
+      case "payment.refunded":
+        await handlePaymentRefunded(payload.data)
+        break
+      default:
+        console.log(`[slack-app] ignoring CRM event: ${payload.event}`)
+    }
+    return new Response(JSON.stringify({ ok: true }), {
+      headers: { "Content-Type": "application/json" },
+    })
+  } catch (err) {
+    console.error("[slack-app] crm event failed", err)
+    return new Response(JSON.stringify({ ok: false, error: (err as Error).message }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    })
+  }
+}
+
 async function handleEventsPayload(payload: {
   type: string
   challenge?: string
@@ -624,14 +801,27 @@ serve(async (req) => {
 
   const contentType = req.headers.get("content-type") ?? ""
 
-  // Events API — JSON body with a `type` field.
+  // JSON body — could be a CRM internal event (has `event` field) or a Slack
+  // Events API payload (has `type` field).
   if (contentType.includes("application/json")) {
+    let payload: Record<string, unknown>
     try {
-      const payload = JSON.parse(rawBody)
-      return await handleEventsPayload(payload, signatureValid)
+      payload = JSON.parse(rawBody)
     } catch {
       return new Response("bad json", { status: 400 })
     }
+
+    if (typeof payload.event === "string" && payload.data) {
+      const crmSig = req.headers.get("x-ecompulse-signature")
+      const crmValid = await verifyCrmSignature(rawBody, crmSig)
+      if (!crmValid) return new Response("invalid signature", { status: 401 })
+      return await handleCrmEvent(payload as unknown as CrmEvent)
+    }
+
+    return await handleEventsPayload(
+      payload as unknown as Parameters<typeof handleEventsPayload>[0],
+      signatureValid,
+    )
   }
 
   // Slash commands + interactivity arrive form-encoded.

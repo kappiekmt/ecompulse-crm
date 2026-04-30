@@ -25,6 +25,9 @@ export interface StudentRow {
   program: string
   discord_user_id: string | null
   whop_membership_id: string | null
+  discord_invite_url: string | null
+  discord_invite_code: string | null
+  discord_invite_expires_at: string | null
   onboarding_status: OnboardingStatus
   onboarding_checklist: Milestone[] | null
   enrolled_at: string
@@ -57,7 +60,7 @@ export function useStudentsList(filters: StudentListFilters = {}) {
       let q = supabase
         .from("students")
         .select(
-          "id, lead_id, deal_id, coach_id, program, discord_user_id, whop_membership_id, onboarding_status, onboarding_checklist, enrolled_at, updated_at, lead:leads(full_name, email, phone), deal:deals(id, amount_cents, currency, closed_at), coach:team_members!students_coach_id_fkey(id, full_name)"
+          "id, lead_id, deal_id, coach_id, program, discord_user_id, whop_membership_id, discord_invite_url, discord_invite_code, discord_invite_expires_at, onboarding_status, onboarding_checklist, enrolled_at, updated_at, lead:leads(full_name, email, phone), deal:deals(id, amount_cents, currency, closed_at), coach:team_members!students_coach_id_fkey(id, full_name)"
         )
         .order("enrolled_at", { ascending: false })
 
@@ -90,7 +93,7 @@ export function useStudent(id: string | null | undefined) {
       const { data, error } = await supabase
         .from("students")
         .select(
-          "id, lead_id, deal_id, coach_id, program, discord_user_id, whop_membership_id, onboarding_status, onboarding_checklist, enrolled_at, updated_at, lead:leads(full_name, email, phone), deal:deals(id, amount_cents, currency, closed_at), coach:team_members!students_coach_id_fkey(id, full_name)"
+          "id, lead_id, deal_id, coach_id, program, discord_user_id, whop_membership_id, discord_invite_url, discord_invite_code, discord_invite_expires_at, onboarding_status, onboarding_checklist, enrolled_at, updated_at, lead:leads(full_name, email, phone), deal:deals(id, amount_cents, currency, closed_at), coach:team_members!students_coach_id_fkey(id, full_name)"
         )
         .eq("id", id!)
         .maybeSingle()
@@ -317,6 +320,36 @@ export function useStudentNotes(studentId: string | null | undefined) {
         actor_id: r.actor_id,
         actor: r.actor,
       }))
+    },
+  })
+}
+
+export function useGenerateDiscordInvite() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (studentId: string) => {
+      const { data: sess } = await supabase.auth.getSession()
+      const jwt = sess.session?.access_token
+      if (!jwt) throw new Error("Not signed in")
+      const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/discord-invite`
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${jwt}`,
+        },
+        body: JSON.stringify({ student_id: studentId }),
+      })
+      const json = (await res.json()) as { ok?: boolean; url?: string; error?: string; detail?: string }
+      if (!res.ok || !json.ok) {
+        throw new Error(json.error ?? `discord-invite returned ${res.status}`)
+      }
+      return json
+    },
+    onSuccess: (_d, studentId) => {
+      qc.invalidateQueries({ queryKey: ["student", studentId] })
+      qc.invalidateQueries({ queryKey: ["students-list"] })
+      qc.invalidateQueries({ queryKey: ["student-activity", studentId] })
     },
   })
 }

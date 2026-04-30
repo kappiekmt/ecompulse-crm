@@ -196,6 +196,12 @@ export const INTEGRATION_SPECS: IntegrationSpec[] = [
     fields: [
       { key: "bot_token", label: "Bot Token", kind: "secret" },
       { key: "guild_id", label: "Server (Guild) ID", kind: "text" },
+      {
+        key: "welcome_channel_id",
+        label: "Welcome Channel ID",
+        kind: "text",
+        optional: true,
+      },
     ],
   },
   {

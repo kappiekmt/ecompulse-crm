@@ -30,3 +30,14 @@ verify_jwt = false
 # pg_cron calls it every minute with the project's service_role JWT.
 [functions.dispatch-reminders]
 verify_jwt = true
+
+# Admin-only "Test all automations" panel. JWT required (gateway-enforced).
+# Role check inline rejects anyone who isn't an admin team_member.
+[functions.automation-tests]
+verify_jwt = true
+
+# Discord invite generator — admin OR the student's coach can issue.
+# JWT enforced by gateway; the function itself enforces RLS via the user's
+# JWT, so non-admin/non-coach callers can't read the student row.
+[functions.discord-invite]
+verify_jwt = true

@@ -3,12 +3,15 @@ import {
   CalendarDays,
   CheckCircle2,
   Circle,
+  Copy,
   GraduationCap,
+  Hash,
   Loader2,
   Mail,
   MessageSquarePlus,
   Phone,
   Plus,
+  RefreshCw,
   Trash2,
   UserCog,
 } from "lucide-react"
@@ -28,6 +31,7 @@ import { Select } from "@/components/ui/select"
 import {
   useAddStudentNote,
   useDeleteMilestone,
+  useGenerateDiscordInvite,
   useStudent,
   useStudentActivity,
   useStudentNotes,
@@ -36,6 +40,7 @@ import {
   useUpsertMilestone,
   type Milestone,
   type OnboardingStatus,
+  type StudentRow,
 } from "@/lib/queries/students"
 import { useTeamMembers } from "@/lib/queries/dashboard"
 import { useAuth } from "@/lib/auth"
@@ -161,9 +166,14 @@ function Inner({ studentId }: { studentId: string }) {
                   ? formatCurrency(s.deal.amount_cents, s.deal.currency ?? "EUR")
                   : "—"}
               </Field>
-              <Field label="Discord">{s.discord_user_id ?? "—"}</Field>
+              <Field label="Discord user">{s.discord_user_id ?? "—"}</Field>
               <Field label="Whop">{s.whop_membership_id ?? "—"}</Field>
             </div>
+          </Section>
+
+          {/* Discord invite */}
+          <Section title="Discord access">
+            <DiscordInvitePanel student={s} />
           </Section>
 
           {/* Assignment & status (admin can edit) */}
@@ -304,6 +314,97 @@ function ProgressBar({ pct }: { pct: number }) {
         className="h-full bg-[var(--color-primary)] transition-all"
         style={{ width: `${pct}%` }}
       />
+    </div>
+  )
+}
+
+// ─── Discord invite ─────────────────────────────────────────────────────────
+
+function DiscordInvitePanel({ student }: { student: StudentRow }) {
+  const generate = useGenerateDiscordInvite()
+  const [copied, setCopied] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+
+  const url = student.discord_invite_url
+  const expires = student.discord_invite_expires_at
+  const expired = expires ? new Date(expires).getTime() < Date.now() : false
+
+  async function copy() {
+    if (!url) return
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function issue() {
+    setError(null)
+    generate.mutate(student.id, {
+      onError: (err) => setError((err as Error).message),
+    })
+  }
+
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] p-3">
+      {url && !expired ? (
+        <>
+          <div className="flex items-center gap-2">
+            <Hash className="h-3.5 w-3.5 text-[var(--color-muted-foreground)]" />
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex-1 truncate text-sm text-[var(--color-primary)] underline"
+            >
+              {url}
+            </a>
+            <Button size="sm" variant="outline" onClick={copy}>
+              <Copy className="h-3 w-3" />
+              {copied ? "Copied" : "Copy"}
+            </Button>
+          </div>
+          <div className="flex items-center justify-between text-[11px] text-[var(--color-muted-foreground)]">
+            <span>
+              {expires
+                ? `Expires ${formatDateTime(expires)}`
+                : "Single-use, never expires"}
+            </span>
+            <button
+              type="button"
+              onClick={issue}
+              disabled={generate.isPending}
+              className="inline-flex items-center gap-1 hover:text-[var(--color-foreground)]"
+            >
+              {generate.isPending ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3 w-3" />
+              )}
+              Re-issue
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="text-sm text-[var(--color-muted-foreground)]">
+            {expired
+              ? "Last invite expired. Issue a fresh one for this student."
+              : "No Discord invite generated yet. Issue one and share with the student."}
+          </p>
+          <Button size="sm" onClick={issue} disabled={generate.isPending}>
+            {generate.isPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Hash className="h-3.5 w-3.5" />
+            )}
+            Generate Discord invite
+          </Button>
+        </>
+      )}
+      {error && <p className="text-xs text-[var(--color-destructive)]">{error}</p>}
     </div>
   )
 }

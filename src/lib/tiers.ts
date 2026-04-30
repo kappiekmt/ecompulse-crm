@@ -36,10 +36,28 @@ export function tierByKey(key: string | null | undefined) {
   return TIERS.find((t) => t.key === key) ?? null
 }
 
+/**
+ * Match a payment amount to the closest coaching tier.
+ *
+ * Rather than requiring an exact match, we pick the nearest tier within
+ * €1,500 — this absorbs VAT (21%), discounts of a few hundred €, deposit
+ * payments etc. The 4 tiers are €2,000 apart so this never collides.
+ *
+ * On a tie (e.g. €5,997 is exactly between 1-1 and Nick 1-1), the higher
+ * tier wins — paying more usually signals the bigger package.
+ */
 export function tierByAmountCents(cents: number | null | undefined) {
   if (!cents) return null
-  // Within €5 of any tier price counts as that tier — covers VAT rounding,
-  // ad-hoc discounts a few euros off, etc. Anything further is "default".
-  const tolerance = 500
-  return TIERS.find((t) => Math.abs(t.price_cents - cents) <= tolerance) ?? null
+  const tolerance = 150_000 // €1,500
+  let best: (typeof TIERS)[number] | null = null
+  let bestDelta = Infinity
+  for (const t of TIERS) {
+    const delta = Math.abs(t.price_cents - cents)
+    if (delta > tolerance) continue
+    if (delta < bestDelta || (delta === bestDelta && best && t.price_cents > best.price_cents)) {
+      best = t
+      bestDelta = delta
+    }
+  }
+  return best
 }

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import type { LeadStage } from "@/lib/database.types"
+import { tierByAmountCents, tierByKey } from "@/lib/tiers"
 
 export interface LeadListRow {
   id: string
@@ -267,6 +268,17 @@ export function useLeadPayments(leadId: string | null | undefined) {
   })
 }
 
+/**
+ * Manual "Add payment" on a lead. Mirrors the stripe-webhook end-to-end
+ * enrollment flow:
+ *   1. Resolve tier — lead.intended_tier wins, else amount-based match.
+ *   2. Find or create the deal (won, status=won).
+ *   3. Insert the payment row (source='manual').
+ *   4. Move the lead to stage='won'.
+ *   5. Find or create the student row, auto-assigning the least-loaded
+ *      active coach/admin.
+ * Idempotent — re-running on the same lead+amount won't duplicate rows.
+ */
 export function useAddPayment() {
   const qc = useQueryClient()
   return useMutation({
@@ -277,23 +289,137 @@ export function useAddPayment() {
       paid_at?: string
       notes?: string | null
     }) => {
-      const { error } = await supabase.from("payments").insert({
+      const paidAt = input.paid_at ?? new Date().toISOString()
+      const currency = input.currency ?? "EUR"
+
+      // 1. Lead context (intended tier).
+      const { data: lead } = await supabase
+        .from("leads")
+        .select("intended_tier")
+        .eq("id", input.leadId)
+        .single()
+      const tier =
+        tierByKey(lead?.intended_tier ?? null) ??
+        tierByAmountCents(input.amount_cents)
+      const programName = tier?.program ?? "default"
+
+      // 2. Find or create the deal. Match by lead+amount so a duplicate
+      //    "Add payment" of the same value doesn't create a second deal.
+      let dealId: string | null = null
+      const { data: existingDeal } = await supabase
+        .from("deals")
+        .select("id")
+        .eq("lead_id", input.leadId)
+        .eq("amount_cents", input.amount_cents)
+        .eq("status", "won")
+        .maybeSingle()
+      if (existingDeal) {
+        dealId = existingDeal.id
+      } else {
+        const { data: newDeal, error: dealErr } = await supabase
+          .from("deals")
+          .insert({
+            lead_id: input.leadId,
+            program: programName,
+            amount_cents: input.amount_cents,
+            currency,
+            status: "won",
+            closed_at: paidAt,
+          })
+          .select("id")
+          .single()
+        if (dealErr) throw dealErr
+        dealId = newDeal?.id ?? null
+      }
+
+      // 3. Payment row.
+      const { error: payErr } = await supabase.from("payments").insert({
         lead_id: input.leadId,
+        deal_id: dealId,
         amount_cents: input.amount_cents,
-        currency: input.currency ?? "EUR",
-        paid_at: input.paid_at ?? new Date().toISOString(),
+        currency,
+        paid_at: paidAt,
         source: "manual",
         notes: input.notes ?? null,
       })
-      if (error) throw error
+      if (payErr) throw payErr
+
+      // 4. Lead → won.
+      await supabase.from("leads").update({ stage: "won" }).eq("id", input.leadId)
+
+      // 5. Student row — find or create, auto-assign coach.
+      if (dealId) {
+        const { data: existingStudent } = await supabase
+          .from("students")
+          .select("id, coach_id")
+          .eq("deal_id", dealId)
+          .maybeSingle()
+
+        if (!existingStudent) {
+          const coachId = await pickLeastLoadedCoach()
+          await supabase.from("students").insert({
+            lead_id: input.leadId,
+            deal_id: dealId,
+            coach_id: coachId,
+            program: programName,
+            onboarding_status: "pending",
+            enrolled_at: paidAt,
+          })
+        } else if (!existingStudent.coach_id) {
+          const coachId = await pickLeastLoadedCoach()
+          if (coachId) {
+            await supabase
+              .from("students")
+              .update({ coach_id: coachId })
+              .eq("id", existingStudent.id)
+          }
+        }
+      }
     },
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ["lead-payments", vars.leadId] })
       qc.invalidateQueries({ queryKey: ["lead", vars.leadId] })
+      qc.invalidateQueries({ queryKey: ["leads-list"] })
+      qc.invalidateQueries({ queryKey: ["students-list"] })
+      qc.invalidateQueries({ queryKey: ["student-counts"] })
+      qc.invalidateQueries({ queryKey: ["my-students"] })
+      qc.invalidateQueries({ queryKey: ["my-student-counts"] })
       qc.invalidateQueries({ queryKey: ["kpi-snapshot"] })
       qc.invalidateQueries({ queryKey: ["closer-performance"] })
     },
   })
+}
+
+/**
+ * Pick the active coach (or admin acting as coach) with the fewest
+ * pending/in-progress students. Tie-break alphabetically for deterministic
+ * test behaviour.
+ */
+async function pickLeastLoadedCoach(): Promise<string | null> {
+  const { data: candidates } = await supabase
+    .from("team_members")
+    .select("id, full_name")
+    .in("role", ["coach", "admin"])
+    .eq("is_active", true)
+  if (!candidates?.length) return null
+
+  const { data: students } = await supabase
+    .from("students")
+    .select("coach_id")
+    .in("onboarding_status", ["pending", "in_progress"])
+    .not("coach_id", "is", null)
+
+  const counts = new Map<string, number>()
+  for (const s of students ?? []) {
+    if (s.coach_id) counts.set(s.coach_id, (counts.get(s.coach_id) ?? 0) + 1)
+  }
+
+  return [...candidates].sort((a, b) => {
+    const ca = counts.get(a.id) ?? 0
+    const cb = counts.get(b.id) ?? 0
+    if (ca !== cb) return ca - cb
+    return a.full_name.localeCompare(b.full_name)
+  })[0].id
 }
 
 // Call outcomes

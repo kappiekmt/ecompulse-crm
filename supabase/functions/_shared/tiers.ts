@@ -17,6 +17,16 @@ export function tierByKey(key: string | null | undefined) {
 
 export function tierByAmountCents(cents: number | null | undefined) {
   if (!cents) return null
-  const tolerance = 500
-  return TIERS.find((t) => Math.abs(t.price_cents - cents) <= tolerance) ?? null
+  const tolerance = 150_000 // €1,500 — see src/lib/tiers.ts for rationale
+  let best: (typeof TIERS)[number] | null = null
+  let bestDelta = Infinity
+  for (const t of TIERS) {
+    const delta = Math.abs(t.price_cents - cents)
+    if (delta > tolerance) continue
+    if (delta < bestDelta || (delta === bestDelta && best && t.price_cents > best.price_cents)) {
+      best = t
+      bestDelta = delta
+    }
+  }
+  return best
 }

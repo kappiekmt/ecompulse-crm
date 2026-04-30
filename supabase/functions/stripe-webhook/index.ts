@@ -14,6 +14,7 @@ import { adminClient, getIntegrationConfig, logIntegration } from "../_shared/su
 import { dispatchEvent } from "../_shared/dispatch.ts"
 import { resolveCoachingTier } from "../_shared/coaching-tier.ts"
 import { tierByAmountCents, tierByKey } from "../_shared/tiers.ts"
+import { pickLeastLoadedCoach } from "../_shared/coach-assign.ts"
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
@@ -151,21 +152,23 @@ serve(async (req) => {
             payload: { amount_cents: amount, currency, tier: tier?.key ?? null } as never,
           })
 
-          // Auto-create a student row so coach + onboarding flow can begin
-          // immediately. We don't pre-assign a coach — admin does that from
-          // the "Unassigned students" Command Center panel.
+          // Auto-create a student row so onboarding can begin. Coach is
+          // round-robin assigned to the least-loaded active coach (or admin
+          // acting as coach) so the new student isn't stuck waiting.
           if (deal?.id) {
             const { data: existing } = await supabase
               .from("students")
-              .select("id")
+              .select("id, coach_id")
               .eq("deal_id", deal.id)
               .maybeSingle()
             if (!existing) {
+              const coachId = await pickLeastLoadedCoach(supabase)
               const { data: newStudent } = await supabase
                 .from("students")
                 .insert({
                   lead_id: leadId,
                   deal_id: deal.id,
+                  coach_id: coachId,
                   program: programName,
                   onboarding_status: "pending",
                   enrolled_at: new Date().toISOString(),
@@ -176,8 +179,21 @@ serve(async (req) => {
                 await supabase.from("activities").insert({
                   student_id: newStudent.id,
                   type: "student.enrolled",
-                  payload: { tier: tier?.key ?? null, program: programName } as never,
+                  payload: {
+                    tier: tier?.key ?? null,
+                    program: programName,
+                    auto_assigned_coach_id: coachId,
+                  } as never,
                 })
+              }
+            } else if (!existing.coach_id) {
+              // Existing student row but no coach — backfill.
+              const coachId = await pickLeastLoadedCoach(supabase)
+              if (coachId) {
+                await supabase
+                  .from("students")
+                  .update({ coach_id: coachId })
+                  .eq("id", existing.id)
               }
             }
           }

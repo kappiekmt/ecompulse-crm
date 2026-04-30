@@ -96,11 +96,19 @@ export const INTEGRATION_SPECS: IntegrationSpec[] = [
         helper: "Slack incoming webhook for the daily EOD report. Use a channel-specific webhook (e.g. #sales).",
       },
       {
-        key: "alerts_webhook_url",
-        label: "Booking & Sale Alerts Webhook URL",
+        key: "bookings_webhook_url",
+        label: "Bookings Webhook URL",
         kind: "secret",
         placeholder: "https://hooks.slack.com/services/…",
-        helper: "Optional. Separate webhook for new bookings, payment received, refunds. Falls back to EOD webhook if empty.",
+        helper: "Channel that receives new-call-booked and call-cancelled notifications. Posted from calendly-webhook directly — no Zapier needed.",
+        optional: true,
+      },
+      {
+        key: "payments_webhook_url",
+        label: "Payments Webhook URL",
+        kind: "secret",
+        placeholder: "https://hooks.slack.com/services/…",
+        helper: "Channel that receives payment.received and payment.refunded notifications.",
         optional: true,
       },
       {

@@ -10,6 +10,12 @@ import { serve } from "https://deno.land/std@0.224.0/http/server.ts"
 import { corsHeaders } from "../_shared/cors.ts"
 import { adminClient, getIntegrationConfig, logIntegration } from "../_shared/supabase-admin.ts"
 import { dispatchEvent } from "../_shared/dispatch.ts"
+import {
+  formatLocalTime,
+  leadDeepLink,
+  postToSlack,
+  slackMention,
+} from "../_shared/slack.ts"
 
 interface CalendlyEvent {
   event: string // "invitee.created" | "invitee.canceled"
@@ -123,14 +129,20 @@ serve(async (req) => {
     const scheduledFor = p.scheduled_event?.start_time ?? null
 
     let closerId: string | null = null
+    let closerFullName: string | null = null
+    let closerSlackId: string | null = null
+    let closerTimezone: string | null = null
     if (closerEmail) {
       const { data } = await supabase
         .from("team_members")
-        .select("id")
+        .select("id, full_name, slack_user_id, timezone")
         .eq("email", closerEmail)
         .eq("role", "closer")
         .maybeSingle()
       closerId = data?.id ?? null
+      closerFullName = data?.full_name ?? null
+      closerSlackId = data?.slack_user_id ?? null
+      closerTimezone = data?.timezone ?? null
     }
 
     const nowIso = new Date().toISOString()
@@ -222,6 +234,22 @@ serve(async (req) => {
       },
     })
 
+    // Native Slack notification — gated by automation toggle + presence of webhook URL.
+    await maybePostBookingSlack(supabase, {
+      kind: "created",
+      lead: {
+        id: lead.id,
+        full_name: p.name ?? "Unknown",
+        email: p.email ?? null,
+        phone: p.text_reminder_number ?? null,
+        instagram: null,
+      },
+      scheduledFor,
+      closerName: closerFullName,
+      closerSlackId,
+      closerTimezone,
+    })
+
     return new Response(JSON.stringify({ ok: true, lead_id: lead.id }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     })
@@ -270,8 +298,179 @@ serve(async (req) => {
       },
     })
 
+    // Look up the lead so we can deep-link the closer back to it from Slack.
+    let cancelledLeadId: string | null = null
+    let cancelledScheduledAt: string | null = null
+    let cancelledCloserName: string | null = null
+    let cancelledCloserSlackId: string | null = null
+    let cancelledCloserTimezone: string | null = null
+    if (p.email) {
+      const { data: l } = await supabase
+        .from("leads")
+        .select(
+          "id, scheduled_at, closer:team_members!leads_closer_id_fkey(full_name, slack_user_id, timezone)"
+        )
+        .eq("email", p.email)
+        .maybeSingle()
+      if (l) {
+        cancelledLeadId = (l as { id: string }).id
+        cancelledScheduledAt = (l as { scheduled_at: string | null }).scheduled_at
+        const c = (l as { closer: { full_name?: string; slack_user_id?: string | null; timezone?: string | null } | null }).closer
+        cancelledCloserName = c?.full_name ?? null
+        cancelledCloserSlackId = c?.slack_user_id ?? null
+        cancelledCloserTimezone = c?.timezone ?? null
+      }
+    }
+
+    await maybePostBookingSlack(supabase, {
+      kind: "cancelled",
+      lead: {
+        id: cancelledLeadId,
+        full_name: p.name ?? "Unknown",
+        email: p.email ?? null,
+        phone: null,
+        instagram: null,
+      },
+      scheduledFor: cancelledScheduledAt,
+      closerName: cancelledCloserName,
+      closerSlackId: cancelledCloserSlackId,
+      closerTimezone: cancelledCloserTimezone,
+    })
+
     return new Response("ok", { headers: corsHeaders })
   }
 
   return new Response("Ignored", { status: 200, headers: corsHeaders })
 })
+
+interface BookingSlackArgs {
+  kind: "created" | "cancelled"
+  lead: {
+    id: string | null
+    full_name: string
+    email: string | null
+    phone: string | null
+    instagram: string | null
+  }
+  scheduledFor: string | null
+  closerName: string | null
+  closerSlackId: string | null
+  closerTimezone: string | null
+}
+
+async function maybePostBookingSlack(
+  supabase: ReturnType<typeof adminClient>,
+  args: BookingSlackArgs
+) {
+  // Gate by the automation toggle.
+  const settingKey = args.kind === "created" ? "new_call_booked" : "call_cancelled"
+  const { data: setting } = await supabase
+    .from("automation_settings")
+    .select("enabled")
+    .eq("key", settingKey)
+    .maybeSingle()
+  if (setting && setting.enabled === false) return
+
+  const slackConfig = await getIntegrationConfig(supabase, "slack")
+  const webhookUrl = slackConfig?.bookings_webhook_url
+  if (!webhookUrl) return
+
+  const closerLine = args.closerName
+    ? slackMention(args.closerSlackId) ?? `*${args.closerName}*`
+    : "_Unassigned_"
+  const scheduledLine = formatLocalTime(args.scheduledFor, args.closerTimezone)
+
+  const message =
+    args.kind === "created"
+      ? buildCreatedMessage(args, closerLine, scheduledLine)
+      : buildCancelledMessage(args, closerLine, scheduledLine)
+
+  const result = await postToSlack(webhookUrl, message)
+  await logIntegration(supabase, {
+    provider: "slack",
+    direction: "outbound",
+    event_type: args.kind === "created" ? "slack.call_booked" : "slack.call_cancelled",
+    status: result.ok ? "success" : "failed",
+    request_payload: { lead_email: args.lead.email } as never,
+    response_payload: { status: result.status, body: result.body } as never,
+    error: result.error,
+    related_lead_id: args.lead.id,
+  })
+}
+
+function buildCreatedMessage(
+  args: BookingSlackArgs,
+  closerLine: string,
+  scheduledLine: string
+) {
+  const fields: { type: "mrkdwn"; text: string }[] = [
+    { type: "mrkdwn", text: `*Lead*\n${args.lead.full_name}` },
+    { type: "mrkdwn", text: `*Closer*\n${closerLine}` },
+  ]
+  if (args.lead.email) fields.push({ type: "mrkdwn", text: `*Email*\n${args.lead.email}` })
+  if (args.lead.phone) fields.push({ type: "mrkdwn", text: `*Phone*\n${args.lead.phone}` })
+  fields.push({ type: "mrkdwn", text: `*Scheduled*\n${scheduledLine}` })
+
+  const ctxParts: string[] = ["EcomPulse CRM · bookings"]
+  if (args.lead.id) {
+    ctxParts.push(`<${leadDeepLink(args.lead.id)}|Open lead in CRM →>`)
+  }
+
+  return {
+    text: `New lead booked: ${args.lead.full_name} — ${scheduledLine}`,
+    blocks: [
+      {
+        type: "header",
+        text: { type: "plain_text", text: "🗓  New Lead Booked", emoji: true },
+      },
+      { type: "section", fields },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text:
+            (slackMention(args.closerSlackId) ?? "") +
+            (slackMention(args.closerSlackId) ? " — " : "") +
+            "Start your *Pre-Call SOP* now.",
+        },
+      },
+      {
+        type: "context",
+        elements: [{ type: "mrkdwn", text: ctxParts.join("  ·  ") }],
+      },
+    ],
+  }
+}
+
+function buildCancelledMessage(
+  args: BookingSlackArgs,
+  closerLine: string,
+  scheduledLine: string
+) {
+  const fields: { type: "mrkdwn"; text: string }[] = [
+    { type: "mrkdwn", text: `*Lead*\n${args.lead.full_name}` },
+    { type: "mrkdwn", text: `*Closer*\n${closerLine}` },
+  ]
+  if (args.lead.email) fields.push({ type: "mrkdwn", text: `*Email*\n${args.lead.email}` })
+  fields.push({ type: "mrkdwn", text: `*Was scheduled*\n${scheduledLine}` })
+
+  const ctxParts: string[] = ["EcomPulse CRM · bookings"]
+  if (args.lead.id) {
+    ctxParts.push(`<${leadDeepLink(args.lead.id)}|Open lead in CRM →>`)
+  }
+
+  return {
+    text: `Call cancelled: ${args.lead.full_name}`,
+    blocks: [
+      {
+        type: "header",
+        text: { type: "plain_text", text: "❌  Call Cancelled", emoji: true },
+      },
+      { type: "section", fields },
+      {
+        type: "context",
+        elements: [{ type: "mrkdwn", text: ctxParts.join("  ·  ") }],
+      },
+    ],
+  }
+}

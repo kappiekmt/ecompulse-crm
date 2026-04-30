@@ -52,6 +52,9 @@ export function DialogContent({ className, children, ...props }: DialogContentPr
         aria-modal="true"
         className={cn(
           "relative z-10 flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] shadow-lg",
+          // When a <form> wraps the body+footer, make it a flex column that fills
+          // available height so DialogBody's overflow-y-auto actually scrolls.
+          "[&>form]:flex [&>form]:min-h-0 [&>form]:flex-1 [&>form]:flex-col [&>form]:overflow-hidden",
           className
         )}
         {...props}
@@ -99,7 +102,15 @@ export function DialogDescription({
 }
 
 export function DialogBody({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("flex flex-col gap-4 overflow-y-auto px-6 py-5", className)} {...props} />
+  return (
+    <div
+      className={cn(
+        "flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 py-5",
+        className
+      )}
+      {...props}
+    />
+  )
 }
 
 export function DialogFooter({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {

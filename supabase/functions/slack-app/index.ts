@@ -106,17 +106,24 @@ async function handleNote(payload: SlashPayload) {
   return ephemeral(`📝 Note added to *${lead.name ?? "(unnamed)"}*.`)
 }
 
-async function handleStudentStatus(payload: SlashPayload) {
+interface MilestoneShape {
+  id?: string
+  title?: string
+  completed_at?: string | null
+  target_date?: string | null
+}
+
+async function handleStudent(payload: SlashPayload) {
   const supabase = adminClient()
   const query = payload.text.trim()
-  if (!query) return ephemeral("Usage: `/student-status <name or email>`")
+  if (!query) return ephemeral("Usage: `/student <name or email>`")
 
   // Two-step: find matching leads, then fetch their student rows. Avoids
-  // brittle cross-table OR syntax in PostgREST.
+  // PostgREST's brittle cross-table OR syntax.
   const { data: leads } = await supabase
     .from("leads")
     .select("id")
-    .or(`email.ilike.%${query}%,name.ilike.%${query}%`)
+    .or(`email.ilike.%${query}%,full_name.ilike.%${query}%`)
     .limit(10)
 
   const leadIds = (leads ?? []).map((l) => l.id)
@@ -125,27 +132,124 @@ async function handleStudentStatus(payload: SlashPayload) {
   const { data } = await supabase
     .from("students")
     .select(
-      "id, program, coaching_tier, onboarding_status, enrolled_at, lead:leads(name, email), coach:team_members(full_name)",
+      "id, program, onboarding_status, onboarding_checklist, enrolled_at, discord_invite_url, lead:leads(full_name, email), coach:team_members!students_coach_id_fkey(full_name, slack_user_id)",
     )
     .in("lead_id", leadIds)
     .limit(5)
 
   if (!data || data.length === 0) return ephemeral(`No students matched \`${query}\`.`)
 
-  const blocks = data.map((s) => {
-    const lead = (s.lead ?? {}) as { name?: string; email?: string }
-    const coach = (s.coach ?? {}) as { full_name?: string }
-    return {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: [
-          `*${lead.name ?? "(no name)"}* — ${lead.email ?? "—"}`,
-          `Tier: \`${s.coaching_tier ?? "—"}\` · Status: \`${s.onboarding_status}\``,
-          `Coach: ${coach.full_name ?? "(unassigned)"} · Enrolled: ${new Date(s.enrolled_at).toLocaleDateString()}`,
-        ].join("\n"),
-      },
+  type StudentJoined = {
+    id: string
+    program: string
+    onboarding_status: "pending" | "in_progress" | "complete"
+    onboarding_checklist: MilestoneShape[] | null
+    enrolled_at: string
+    discord_invite_url: string | null
+    lead: { full_name?: string; email?: string | null } | null
+    coach: { full_name?: string; slack_user_id?: string | null } | null
+  }
+  const rows = data as unknown as StudentJoined[]
+
+  // Pull the most-recent note per student so the bot can show "what
+  // happened last" — coaches care about that.
+  const studentIds = rows.map((s) => s.id)
+  const { data: notes } = await supabase
+    .from("activities")
+    .select("student_id, payload, created_at")
+    .in("student_id", studentIds)
+    .eq("type", "note")
+    .order("created_at", { ascending: false })
+  const lastNote = new Map<string, { body: string; created_at: string }>()
+  for (const n of notes ?? []) {
+    if (!lastNote.has(n.student_id)) {
+      const body = (n.payload as { body?: string })?.body ?? ""
+      lastNote.set(n.student_id, { body, created_at: n.created_at })
     }
+  }
+
+  const blocks: unknown[] = []
+  rows.forEach((s, i) => {
+    const milestones = Array.isArray(s.onboarding_checklist) ? s.onboarding_checklist : []
+    const total = milestones.length
+    const done = milestones.filter((m) => m?.completed_at).length
+    const pct = total === 0 ? 0 : Math.round((done / total) * 100)
+    const nextOpen = milestones.find((m) => !m?.completed_at)
+    const coachLabel = s.coach?.slack_user_id
+      ? `<@${s.coach.slack_user_id}>`
+      : s.coach?.full_name
+      ? `*${s.coach.full_name}*`
+      : "_unassigned_"
+    const statusEmoji =
+      s.onboarding_status === "complete" ? "✅"
+      : s.onboarding_status === "in_progress" ? "🟡"
+      : "⏳"
+    const note = lastNote.get(s.id)
+
+    if (i > 0) blocks.push({ type: "divider" })
+
+    blocks.push({
+      type: "section",
+      fields: [
+        {
+          type: "mrkdwn",
+          text: `*${s.lead?.full_name ?? "(no name)"}*\n${s.lead?.email ?? "—"}`,
+        },
+        {
+          type: "mrkdwn",
+          text: `${statusEmoji} *${s.onboarding_status.replace(/_/g, " ")}*\n*Program:* ${s.program}`,
+        },
+        {
+          type: "mrkdwn",
+          text: `*Coach:*\n${coachLabel}`,
+        },
+        {
+          type: "mrkdwn",
+          text: `*Enrolled:*\n${new Date(s.enrolled_at).toLocaleDateString()}`,
+        },
+      ],
+    })
+
+    blocks.push({
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text:
+            total === 0
+              ? "_No milestones set._"
+              : `*Milestones:* ${done}/${total} done · ${pct}%${
+                  nextOpen?.title ? ` · _Next:_ ${nextOpen.title}` : ""
+                }`,
+        },
+      ],
+    })
+
+    if (note) {
+      blocks.push({
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `📝 *Last note* (${new Date(note.created_at).toLocaleDateString()}): ${note.body.slice(0, 240)}${
+              note.body.length > 240 ? "…" : ""
+            }`,
+          },
+        ],
+      })
+    }
+
+    blocks.push({
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: { type: "plain_text", text: "👉 See in CRM", emoji: true },
+          url: `${PUBLIC_APP_URL}/students?student=${s.id}`,
+          style: "primary",
+        },
+      ],
+    })
   })
 
   return new Response(
@@ -171,7 +275,9 @@ async function handleSlashCommand(req: Request): Promise<Response> {
     switch (form.command) {
       case "/lead": return await handleLead(form)
       case "/note": return await handleNote(form)
-      case "/student-status": return await handleStudentStatus(form)
+      case "/student":
+      case "/student-status":
+        return await handleStudent(form)
       default:
         return ephemeral(`Unknown command \`${form.command}\``)
     }

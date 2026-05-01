@@ -315,6 +315,14 @@ export interface Database {
         updated_at: string
         updated_by: string | null
       }>
+      profit_splits: Tbl<{
+        id: string
+        team_member_id: string
+        share_pct: number
+        display_order: number
+        created_at: string
+        updated_at: string
+      }>
       api_keys: Tbl<
         {
           id: string

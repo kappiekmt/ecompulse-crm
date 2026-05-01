@@ -10,6 +10,7 @@ import {
   HelpCircle,
   Command,
   GraduationCap,
+  Banknote,
   type LucideIcon,
 } from "lucide-react"
 import type { TeamRole } from "@/lib/database.types"
@@ -55,6 +56,12 @@ export const NAV_SECTIONS: NavSection[] = [
     label: "Coaching",
     items: [
       { label: "Students", to: "/students", icon: GraduationCap, roles: ["admin", "coach"] },
+    ],
+  },
+  {
+    label: "Finance",
+    items: [
+      { label: "Finance", to: "/finance", icon: Banknote, roles: ["admin"] },
     ],
   },
   {

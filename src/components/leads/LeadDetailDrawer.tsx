@@ -34,6 +34,7 @@ import { useTeamMembers } from "@/lib/queries/dashboard"
 import type { LeadStage } from "@/lib/database.types"
 import { cn, formatCurrency, formatDateTime } from "@/lib/utils"
 import { TIERS } from "@/lib/tiers"
+import { ContactForm } from "@/components/ContactForm"
 
 interface LeadDetailDrawerProps {
   leadId: string | null
@@ -186,38 +187,21 @@ function Inner({ leadId, onClose }: { leadId: string; onClose: () => void }) {
 
         {/* CONTACT INFORMATION */}
         <Section label="Contact information">
+          <ContactForm
+            contact={{
+              full_name: l.full_name,
+              email: l.email,
+              phone: l.phone,
+              instagram: l.instagram,
+            }}
+            saving={update.isPending}
+            onSave={(p) => update.mutateAsync({ id: l.id, patch: p })}
+          />
+        </Section>
+
+        {/* PITCH & BUDGET */}
+        <Section label="Pitch & budget">
           <div className="grid grid-cols-2 gap-x-3 gap-y-3">
-            <Field label="Full name">
-              <BlurEditable
-                value={l.full_name ?? ""}
-                placeholder="-"
-                onCommit={(v) => {
-                  const trimmed = v.trim()
-                  if (trimmed && trimmed !== l.full_name) patch({ full_name: trimmed })
-                }}
-              />
-            </Field>
-            <Field label="Email">
-              <BlurEditable
-                value={l.email ?? ""}
-                placeholder="-"
-                onCommit={(v) => patch({ email: v || null })}
-              />
-            </Field>
-            <Field label="Phone">
-              <BlurEditable
-                value={l.phone ?? ""}
-                placeholder="-"
-                onCommit={(v) => patch({ phone: v || null })}
-              />
-            </Field>
-            <Field label="Instagram">
-              <BlurEditable
-                value={l.instagram ?? ""}
-                placeholder="-"
-                onCommit={(v) => patch({ instagram: v || null })}
-              />
-            </Field>
             <Field label="Budget">
               <BlurEditable
                 value={l.budget_cents != null ? formatCurrency(l.budget_cents) : ""}

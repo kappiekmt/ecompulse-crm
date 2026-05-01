@@ -142,14 +142,32 @@ interface AuthResult {
   source: "service_role" | "user"
 }
 
+function decodeJwtRole(token: string): string | null {
+  try {
+    const payload = token.split(".")[1]
+    if (!payload) return null
+    const decoded = JSON.parse(
+      atob(payload.replace(/-/g, "+").replace(/_/g, "/"))
+    ) as { role?: string }
+    return decoded.role ?? null
+  } catch {
+    return null
+  }
+}
+
 async function authorize(req: Request): Promise<AuthResult | Response> {
   const auth = req.headers.get("authorization") ?? ""
   const m = auth.match(/^Bearer\s+(.+)$/i)
   if (!m) return jsonResponse({ error: "Missing bearer token" }, { status: 401 })
   const token = m[1].trim()
 
-  const serviceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")
-  if (serviceRole && token === serviceRole) return { ok: true, source: "service_role" }
+  // Recognise service_role tokens via the JWT's role claim, not by string-
+  // matching the env var. The env var can be missing, rotated, or formatted
+  // differently and would silently fall through to the user-JWT path —
+  // which then PASSED the admin check (service_role bypasses RLS, so
+  // team_members reads return all admins) and bypassed the 21:00 gate.
+  const role = decodeJwtRole(token)
+  if (role === "service_role") return { ok: true, source: "service_role" }
 
   const url = Deno.env.get("SUPABASE_URL")
   const anon = Deno.env.get("SUPABASE_ANON_KEY")

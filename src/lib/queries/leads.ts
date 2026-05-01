@@ -185,8 +185,25 @@ export function useCreateLead() {
 }
 
 // Tags — lead-scoped
+export interface LeadTagRow {
+  id: string
+  name: string
+  description: string | null
+  color: string
+}
+
+export const TAG_COLOR_OPTIONS: { value: string; label: string }[] = [
+  { value: "default", label: "Default (blue)" },
+  { value: "secondary", label: "Secondary (gray)" },
+  { value: "success", label: "Success (green)" },
+  { value: "warning", label: "Warning (orange)" },
+  { value: "destructive", label: "Destructive (red)" },
+  { value: "muted", label: "Muted" },
+  { value: "outline", label: "Outline" },
+]
+
 export function useLeadTagsAll() {
-  return useQuery({
+  return useQuery<LeadTagRow[]>({
     queryKey: ["lead-tags-all"],
     enabled: isSupabaseConfigured,
     queryFn: async () => {
@@ -195,7 +212,58 @@ export function useLeadTagsAll() {
         .select("id, name, description, color")
         .order("name")
       if (error) throw error
-      return data ?? []
+      return (data ?? []) as LeadTagRow[]
+    },
+  })
+}
+
+export interface LeadTagUpsertInput {
+  id?: string
+  name: string
+  description?: string | null
+  color?: string
+}
+
+export function useUpsertLeadTag() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (input: LeadTagUpsertInput) => {
+      if (input.id) {
+        const { error } = await supabase
+          .from("lead_tags")
+          .update({
+            name: input.name,
+            description: input.description ?? null,
+            color: input.color ?? "default",
+          })
+          .eq("id", input.id)
+        if (error) throw error
+      } else {
+        const { error } = await supabase.from("lead_tags").insert({
+          name: input.name,
+          description: input.description ?? null,
+          color: input.color ?? "default",
+        })
+        if (error) throw error
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["lead-tags-all"] })
+      qc.invalidateQueries({ queryKey: ["leads-list"] })
+    },
+  })
+}
+
+export function useDeleteLeadTag() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("lead_tags").delete().eq("id", id)
+      if (error) throw error
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["lead-tags-all"] })
+      qc.invalidateQueries({ queryKey: ["leads-list"] })
     },
   })
 }

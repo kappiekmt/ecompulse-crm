@@ -26,7 +26,9 @@ import {
   useDeleteLead,
   useLead,
   useLeadPayments,
+  useLeadTagsAll,
   useLogCallOutcome,
+  useToggleLeadTag,
   useUpdateLead,
   type CallResult,
 } from "@/lib/queries/leads"
@@ -151,6 +153,11 @@ function Inner({ leadId, onClose }: { leadId: string; onClose: () => void }) {
               )
             })}
           </div>
+        </Section>
+
+        {/* TAGS */}
+        <Section label="Tags">
+          <TagToggles leadId={l.id} assignedTagIds={(l.tags ?? []).map((t) => t.tag_id)} />
         </Section>
 
         {/* ASSIGNMENTS */}
@@ -457,6 +464,62 @@ function PaymentsSection({
           ))}
         </ul>
       )}
+    </div>
+  )
+}
+
+function TagToggles({
+  leadId,
+  assignedTagIds,
+}: {
+  leadId: string
+  assignedTagIds: string[]
+}) {
+  const tags = useLeadTagsAll()
+  const toggle = useToggleLeadTag()
+  const assigned = new Set(assignedTagIds)
+
+  if (tags.isLoading)
+    return (
+      <div className="flex items-center gap-2 text-xs text-[var(--color-muted-foreground)]">
+        <Loader2 className="h-3 w-3 animate-spin" /> Loading tags…
+      </div>
+    )
+  if (!tags.data?.length)
+    return (
+      <p className="text-xs text-[var(--color-muted-foreground)]">
+        No tags yet. Create some on the{" "}
+        <a href="/lead-tags" className="text-[var(--color-primary)] underline">
+          Lead Tags
+        </a>{" "}
+        page.
+      </p>
+    )
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {tags.data.map((t) => {
+        const active = assigned.has(t.id)
+        return (
+          <button
+            key={t.id}
+            type="button"
+            disabled={toggle.isPending}
+            onClick={() =>
+              toggle.mutate({ leadId, tagId: t.id, assign: !active })
+            }
+            className={cn(
+              "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+              active
+                ? "border-[var(--color-primary)] bg-[var(--color-primary)]/10 text-[var(--color-primary)]"
+                : "border-[var(--color-border)] text-[var(--color-muted-foreground)] hover:border-[var(--color-foreground)] hover:text-[var(--color-foreground)]"
+            )}
+            title={t.description ?? undefined}
+          >
+            {t.name}
+          </button>
+        )
+      })}
     </div>
   )
 }

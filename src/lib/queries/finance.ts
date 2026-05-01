@@ -376,48 +376,121 @@ export function periodFromPreset(key: PeriodPreset["key"]): FinancePeriod {
   return { startUtc: start.toISOString(), endUtc: end.toISOString() }
 }
 
-/** Build a CSV from the per-payment ledger rows. */
-export function ledgerToCsv(rows: PaymentLedgerRow[]): string {
-  const cols: { key: keyof PaymentLedgerRow | "amount_eur" | "closer_commission_eur" | "setter_commission_eur" | "net_eur"; label: string }[] = [
-    { key: "paid_at", label: "Paid at" },
-    { key: "is_refund", label: "Refund" },
-    { key: "source", label: "Source" },
-    { key: "lead_name", label: "Lead" },
-    { key: "lead_email", label: "Email" },
-    { key: "amount_eur", label: "Amount (EUR)" },
-    { key: "closer_name", label: "Closer" },
-    { key: "closer_pct", label: "Closer %" },
-    { key: "closer_commission_eur", label: "Closer commission (EUR)" },
-    { key: "setter_name", label: "Setter" },
-    { key: "setter_pct", label: "Setter %" },
-    { key: "setter_commission_eur", label: "Setter commission (EUR)" },
-    { key: "net_eur", label: "Net for house (EUR)" },
-    { key: "notes", label: "Notes" },
-  ]
-  const escape = (val: unknown) => {
-    if (val === null || val === undefined) return ""
-    const s = String(val)
-    if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`
-    return s
+interface DealCsvRow {
+  deal_id: string
+  deal_name: string
+  deal_value_cents: number
+  closer_name: string
+  setter_name: string
+  closer_coms_cents: number
+  setter_coms_cents: number
+  profit_cents: number
+  date: string
+}
+
+/**
+ * Aggregate the per-payment ledger into one row per deal — matches the
+ * accounting "FINANCE COMMS TRACKING" template the team already uses.
+ * Refunds for the same deal subtract from its value (so net deal value
+ * tracks reality if a payment got refunded later).
+ */
+export function aggregateLedgerByDeal(rows: PaymentLedgerRow[]): DealCsvRow[] {
+  const byDeal = new Map<string, DealCsvRow>()
+  // Rows without a deal_id are unusual (manual one-off payments not tied to
+  // a deal). Group those by lead so they still show up; key by "lead:<id>".
+  for (const r of rows) {
+    const key = r.deal_id ? `deal:${r.deal_id}` : `lead:${r.lead_id ?? "unknown"}`
+    let row = byDeal.get(key)
+    if (!row) {
+      row = {
+        deal_id: r.deal_id ?? "",
+        deal_name: r.lead_name ?? "—",
+        deal_value_cents: 0,
+        closer_name: r.closer_name ?? "",
+        setter_name: r.setter_name ?? "",
+        closer_coms_cents: 0,
+        setter_coms_cents: 0,
+        profit_cents: 0,
+        date: r.paid_at,
+      }
+      byDeal.set(key, row)
+    }
+    row.deal_value_cents += r.amount_cents
+    row.closer_coms_cents += r.closer_commission_cents
+    row.setter_coms_cents += r.setter_commission_cents
+    // Earliest payment date wins so the Date column reflects when the deal
+    // first closed, not the latest top-up.
+    if (new Date(r.paid_at).getTime() < new Date(row.date).getTime()) {
+      row.date = r.paid_at
+    }
   }
-  const header = cols.map((c) => escape(c.label)).join(",")
-  const lines = rows.map((r) =>
-    cols
-      .map((c) => {
-        switch (c.key) {
-          case "amount_eur":
-            return escape((r.amount_cents / 100).toFixed(2))
-          case "closer_commission_eur":
-            return escape((r.closer_commission_cents / 100).toFixed(2))
-          case "setter_commission_eur":
-            return escape((r.setter_commission_cents / 100).toFixed(2))
-          case "net_eur":
-            return escape((r.net_cents / 100).toFixed(2))
-          default:
-            return escape(r[c.key as keyof PaymentLedgerRow])
-        }
-      })
-      .join(",")
+  for (const row of byDeal.values()) {
+    row.profit_cents =
+      row.deal_value_cents - row.closer_coms_cents - row.setter_coms_cents
+  }
+  return [...byDeal.values()].sort(
+    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
   )
-  return [header, ...lines].join("\n")
+}
+
+function escapeCsv(val: unknown): string {
+  if (val === null || val === undefined) return ""
+  const s = String(val)
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`
+  return s
+}
+
+function formatCents(cents: number): string {
+  // Two-decimal EUR string, no currency symbol — accountants prefer plain
+  // numbers in CSVs so SUM() works in their spreadsheet.
+  return (cents / 100).toFixed(2)
+}
+
+/**
+ * Per-deal CSV matching the team's existing FINANCE COMMS TRACKING sheet:
+ *   DEAL NAME | DEAL VALUE | CLOSER | SETTER | CLOSER COMS | SETTER COMS | PROFIT | DATE
+ * Followed by a TOTAL CASH COLLECTED row.
+ */
+export function ledgerToCsv(rows: PaymentLedgerRow[]): string {
+  const deals = aggregateLedgerByDeal(rows)
+  const totalCashCents = deals.reduce((s, d) => s + d.deal_value_cents, 0)
+  const totalCloserCents = deals.reduce((s, d) => s + d.closer_coms_cents, 0)
+  const totalSetterCents = deals.reduce((s, d) => s + d.setter_coms_cents, 0)
+  const totalProfitCents = deals.reduce((s, d) => s + d.profit_cents, 0)
+
+  const header = [
+    "DEAL NAME",
+    "DEAL VALUE",
+    "CLOSER",
+    "SETTER",
+    "CLOSER COMS",
+    "SETTER COMS",
+    "PROFIT",
+    "DATE",
+  ].map(escapeCsv).join(",")
+
+  const dealLines = deals.map((d) =>
+    [
+      escapeCsv(d.deal_name),
+      formatCents(d.deal_value_cents),
+      escapeCsv(d.closer_name || ""),
+      escapeCsv(d.setter_name || ""),
+      formatCents(d.closer_coms_cents),
+      formatCents(d.setter_coms_cents),
+      formatCents(d.profit_cents),
+      escapeCsv(d.date.slice(0, 10)),
+    ].join(",")
+  )
+
+  // Trailing summary block — visually separated by an empty row.
+  const totals = [
+    "",
+    ["", "", "", "", "", "", "", ""].join(","),
+    ["TOTAL CASH COLLECTED", formatCents(totalCashCents)].join(","),
+    ["TOTAL CLOSER COMS", formatCents(totalCloserCents)].join(","),
+    ["TOTAL SETTER COMS", formatCents(totalSetterCents)].join(","),
+    ["TOTAL PROFIT", formatCents(totalProfitCents)].join(","),
+  ]
+
+  return [header, ...dealLines, ...totals].join("\n")
 }

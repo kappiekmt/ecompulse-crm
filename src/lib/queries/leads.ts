@@ -108,11 +108,11 @@ export interface LeadUpdateInput {
   phone?: string | null
   instagram?: string | null
   timezone?: string | null
+  intended_tier?: string | null
   stage?: LeadStage
   closer_id?: string | null
   setter_id?: string | null
   notes?: string | null
-  intended_tier?: string | null
   budget_cents?: number | null
   scheduled_at?: string | null
   closed_at?: string | null

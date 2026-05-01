@@ -187,6 +187,16 @@ function Inner({ leadId, onClose }: { leadId: string; onClose: () => void }) {
         {/* CONTACT INFORMATION */}
         <Section label="Contact information">
           <div className="grid grid-cols-2 gap-x-3 gap-y-3">
+            <Field label="Full name">
+              <BlurEditable
+                value={l.full_name ?? ""}
+                placeholder="-"
+                onCommit={(v) => {
+                  const trimmed = v.trim()
+                  if (trimmed && trimmed !== l.full_name) patch({ full_name: trimmed })
+                }}
+              />
+            </Field>
             <Field label="Email">
               <BlurEditable
                 value={l.email ?? ""}

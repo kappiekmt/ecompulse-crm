@@ -43,6 +43,7 @@ import {
   type StudentRow,
 } from "@/lib/queries/students"
 import { useTeamMembers } from "@/lib/queries/dashboard"
+import { useUpdateLead } from "@/lib/queries/leads"
 import { useAuth } from "@/lib/auth"
 import { formatCurrency, formatDateTime, initials } from "@/lib/utils"
 
@@ -169,6 +170,11 @@ function Inner({ studentId }: { studentId: string }) {
               <Field label="Discord user">{s.discord_user_id ?? "—"}</Field>
               <Field label="Whop">{s.whop_membership_id ?? "—"}</Field>
             </div>
+          </Section>
+
+          {/* Contact (edits the underlying lead row) */}
+          <Section title="Contact">
+            <ContactEditor leadId={s.lead_id} lead={s.lead ?? null} />
           </Section>
 
           {/* Discord invite */}
@@ -315,6 +321,91 @@ function ProgressBar({ pct }: { pct: number }) {
         style={{ width: `${pct}%` }}
       />
     </div>
+  )
+}
+
+// ─── Contact editor (writes back to the lead row) ──────────────────────────
+
+function ContactEditor({
+  leadId,
+  lead,
+}: {
+  leadId: string
+  lead: {
+    full_name: string
+    email: string | null
+    phone: string | null
+    instagram: string | null
+  } | null
+}) {
+  const update = useUpdateLead()
+
+  function commit(field: "full_name" | "email" | "phone" | "instagram", value: string) {
+    const trimmed = value.trim()
+    const next = trimmed === "" ? null : trimmed
+    const current = (lead?.[field] ?? null) as string | null
+    if (next === current) return
+    if (field === "full_name" && next === null) return // require a name
+    update.mutate({ id: leadId, patch: { [field]: next } })
+  }
+
+  return (
+    <div className="grid grid-cols-2 gap-2 text-xs">
+      <ContactField
+        label="Full name"
+        defaultValue={lead?.full_name ?? ""}
+        onCommit={(v) => commit("full_name", v)}
+      />
+      <ContactField
+        label="Email"
+        defaultValue={lead?.email ?? ""}
+        type="email"
+        onCommit={(v) => commit("email", v)}
+      />
+      <ContactField
+        label="Phone"
+        defaultValue={lead?.phone ?? ""}
+        onCommit={(v) => commit("phone", v)}
+      />
+      <ContactField
+        label="Instagram"
+        defaultValue={lead?.instagram ?? ""}
+        onCommit={(v) => commit("instagram", v)}
+      />
+    </div>
+  )
+}
+
+function ContactField({
+  label,
+  defaultValue,
+  type = "text",
+  onCommit,
+}: {
+  label: string
+  defaultValue: string
+  type?: "text" | "email"
+  onCommit: (v: string) => void
+}) {
+  const [v, setV] = React.useState(defaultValue)
+  React.useEffect(() => setV(defaultValue), [defaultValue])
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[10px] uppercase tracking-wide text-[var(--color-muted-foreground)]">
+        {label}
+      </span>
+      <Input
+        type={type}
+        value={v}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={() => onCommit(v)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur()
+        }}
+        placeholder="—"
+        className="h-8 text-xs"
+      />
+    </label>
   )
 }
 

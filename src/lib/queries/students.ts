@@ -32,7 +32,12 @@ export interface StudentRow {
   onboarding_checklist: Milestone[] | null
   enrolled_at: string
   updated_at: string
-  lead?: { full_name: string; email: string | null; phone: string | null } | null
+  lead?: {
+    full_name: string
+    email: string | null
+    phone: string | null
+    instagram: string | null
+  } | null
   deal?: {
     id: string
     amount_cents: number | null
@@ -60,7 +65,7 @@ export function useStudentsList(filters: StudentListFilters = {}) {
       let q = supabase
         .from("students")
         .select(
-          "id, lead_id, deal_id, coach_id, program, discord_user_id, whop_membership_id, discord_invite_url, discord_invite_code, discord_invite_expires_at, onboarding_status, onboarding_checklist, enrolled_at, updated_at, lead:leads(full_name, email, phone), deal:deals(id, amount_cents, currency, closed_at), coach:team_members!students_coach_id_fkey(id, full_name)"
+          "id, lead_id, deal_id, coach_id, program, discord_user_id, whop_membership_id, discord_invite_url, discord_invite_code, discord_invite_expires_at, onboarding_status, onboarding_checklist, enrolled_at, updated_at, lead:leads(full_name, email, phone, instagram), deal:deals(id, amount_cents, currency, closed_at), coach:team_members!students_coach_id_fkey(id, full_name)"
         )
         .order("enrolled_at", { ascending: false })
 
@@ -93,7 +98,7 @@ export function useStudent(id: string | null | undefined) {
       const { data, error } = await supabase
         .from("students")
         .select(
-          "id, lead_id, deal_id, coach_id, program, discord_user_id, whop_membership_id, discord_invite_url, discord_invite_code, discord_invite_expires_at, onboarding_status, onboarding_checklist, enrolled_at, updated_at, lead:leads(full_name, email, phone), deal:deals(id, amount_cents, currency, closed_at), coach:team_members!students_coach_id_fkey(id, full_name)"
+          "id, lead_id, deal_id, coach_id, program, discord_user_id, whop_membership_id, discord_invite_url, discord_invite_code, discord_invite_expires_at, onboarding_status, onboarding_checklist, enrolled_at, updated_at, lead:leads(full_name, email, phone, instagram), deal:deals(id, amount_cents, currency, closed_at), coach:team_members!students_coach_id_fkey(id, full_name)"
         )
         .eq("id", id!)
         .maybeSingle()

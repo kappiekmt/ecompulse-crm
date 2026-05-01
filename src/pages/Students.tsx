@@ -1,4 +1,5 @@
 import * as React from "react"
+import { useSearchParams } from "react-router-dom"
 import { GraduationCap, Search, UserCog, UsersRound } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
 import { Card, CardContent } from "@/components/ui/card"
@@ -31,7 +32,23 @@ export function Students() {
   const [search, setSearch] = React.useState("")
   const [statusFilter, setStatusFilter] = React.useState<OnboardingStatus | "all">("all")
   const [coachFilter, setCoachFilter] = React.useState("")
-  const [activeId, setActiveId] = React.useState<string | null>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [activeId, setActiveId] = React.useState<string | null>(
+    () => searchParams.get("student") || null
+  )
+
+  function openStudent(id: string | null) {
+    setActiveId(id)
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        if (id) next.set("student", id)
+        else next.delete("student")
+        return next
+      },
+      { replace: true }
+    )
+  }
 
   const debouncedSearch = useDebounced(search, 250)
   const coaches = useTeamMembers(["coach", "admin"])
@@ -178,7 +195,7 @@ export function Students() {
                       return (
                         <tr
                           key={s.id}
-                          onClick={() => setActiveId(s.id)}
+                          onClick={() => openStudent(s.id)}
                           className="cursor-pointer transition-colors hover:bg-[var(--color-secondary)]/40"
                         >
                           <td className="px-4 py-3">
@@ -255,7 +272,7 @@ export function Students() {
         </Card>
       </div>
 
-      <StudentDetailDrawer studentId={activeId} onClose={() => setActiveId(null)} />
+      <StudentDetailDrawer studentId={activeId} onClose={() => openStudent(null)} />
     </div>
   )
 }

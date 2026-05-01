@@ -90,6 +90,10 @@ serve(async (req) => {
     slackMention(student.coach.slack_user_id) ?? `*${student.coach.full_name}*`
   const coachLabel = student.coach.full_name
 
+  const baseUrl =
+    Deno.env.get("CRM_PUBLIC_BASE_URL") ?? "https://coaching.joinecompulse.com"
+  const studentUrl = `${baseUrl}/students?student=${student.id}`
+
   const message = {
     blocks: [
       {
@@ -114,6 +118,17 @@ serve(async (req) => {
           type: "mrkdwn",
           text: `${coachMention} — Start your Welcome Call SOP now.`,
         },
+      },
+      {
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            style: "primary",
+            text: { type: "plain_text", text: "👉 See in CRM", emoji: true },
+            url: studentUrl,
+          },
+        ],
       },
     ],
   }

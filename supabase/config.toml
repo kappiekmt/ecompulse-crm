@@ -41,3 +41,9 @@ verify_jwt = true
 # JWT, so non-admin/non-coach callers can't read the student row.
 [functions.discord-invite]
 verify_jwt = true
+
+# Slack notification when a student is assigned to a coach.
+# Called by a students.coach_id Postgres trigger via pg_net (service_role
+# JWT). Gateway enforces auth.
+[functions.notify-coach-assigned]
+verify_jwt = true

@@ -9,6 +9,7 @@ import { Pipeline } from "@/pages/Pipeline"
 import { Leads } from "@/pages/Leads"
 import { Students } from "@/pages/Students"
 import { Finance } from "@/pages/Finance"
+import { Recovery } from "@/pages/Recovery"
 import { Reports } from "@/pages/Reports"
 import { Automations } from "@/pages/Automations"
 import { Team } from "@/pages/Team"
@@ -57,6 +58,7 @@ function App() {
               <Route path="pipeline" element={<Pipeline />} />
               <Route path="students" element={<Students />} />
               <Route path="finance" element={<Finance />} />
+              <Route path="finance/recovery" element={<Recovery />} />
               <Route path="reports" element={<Reports />} />
               <Route path="automations" element={<Automations />} />
               <Route path="team" element={<Team />} />

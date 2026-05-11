@@ -11,6 +11,7 @@ import {
   Command,
   GraduationCap,
   Banknote,
+  AlertTriangle,
   type LucideIcon,
 } from "lucide-react"
 import type { TeamRole } from "@/lib/database.types"
@@ -62,6 +63,7 @@ export const NAV_SECTIONS: NavSection[] = [
     label: "Finance",
     items: [
       { label: "Finance", to: "/finance", icon: Banknote, roles: ["admin"] },
+      { label: "Payment recovery", to: "/finance/recovery", icon: AlertTriangle, roles: ["admin"] },
     ],
   },
   {

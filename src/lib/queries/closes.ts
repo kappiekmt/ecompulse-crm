@@ -232,3 +232,75 @@ export function useMarkInstallmentPaid() {
     },
   })
 }
+
+interface AddInstallmentInput {
+  deal_id: string
+  lead_id: string
+  amount_cents: number
+  due_date: string
+  paid_now: boolean
+}
+
+async function addInstallment(input: AddInstallmentInput) {
+  const { data: existing } = await supabase
+    .from("deal_installments")
+    .select("seq")
+    .eq("deal_id", input.deal_id)
+    .order("seq", { ascending: false })
+    .limit(1)
+  const nextSeq = (existing?.[0]?.seq ?? 0) + 1
+  const nowIso = new Date().toISOString()
+
+  const { data: inserted, error: insErr } = await supabase
+    .from("deal_installments")
+    .insert({
+      deal_id: input.deal_id,
+      seq: nextSeq,
+      amount_cents: input.amount_cents,
+      due_date: input.due_date,
+      paid_at: input.paid_now ? nowIso : null,
+    })
+    .select("id")
+    .single()
+  if (insErr || !inserted) throw new Error(insErr?.message ?? "Failed to add installment")
+
+  if (input.paid_now) {
+    const { error: payErr } = await supabase.from("payments").insert({
+      lead_id: input.lead_id,
+      deal_id: input.deal_id,
+      amount_cents: input.amount_cents,
+      currency: "EUR",
+      paid_at: nowIso,
+      source: "manual",
+      is_refund: false,
+    })
+    if (payErr) console.warn("[addInstallment] payments insert failed:", payErr.message)
+
+    const { data: sess } = await supabase.auth.getSession()
+    const jwt = sess.session?.access_token
+    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/notify-installment-paid`
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${jwt}`,
+      },
+      body: JSON.stringify({ installment_id: inserted.id }),
+    })
+    const slack = (await res.json()) as { ok?: boolean; error?: string }
+    return { slack: { ok: Boolean(slack.ok), error: slack.error ?? null } }
+  }
+
+  return { slack: { ok: true, error: null } }
+}
+
+export function useAddInstallment() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: addInstallment,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["lead-deal"] })
+      qc.invalidateQueries({ queryKey: ["lead-payments"] })
+    },
+  })
+}

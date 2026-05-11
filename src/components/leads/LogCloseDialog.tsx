@@ -14,7 +14,6 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Select } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
 import { TIERS, type TierKey } from "@/lib/tiers"
 import { useLogClose, type InstallmentInput } from "@/lib/queries/closes"
 import { useAuth } from "@/lib/auth"
@@ -29,8 +28,10 @@ interface LogCloseDialogProps {
   defaultCloserId?: string | null
 }
 
-interface DraftInstallment extends InstallmentInput {
+interface DraftFuture {
   uid: string
+  amount_cents: number
+  due_date: string
 }
 
 function todayIso(): string {
@@ -44,12 +45,11 @@ function addDays(iso: string, days: number): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`
 }
 
-function newDraft(seed: Partial<DraftInstallment> = {}): DraftInstallment {
+function newFuture(seed: Partial<DraftFuture> = {}): DraftFuture {
   return {
     uid: crypto.randomUUID(),
     amount_cents: seed.amount_cents ?? 0,
-    due_date: seed.due_date ?? todayIso(),
-    paid_today: seed.paid_today ?? false,
+    due_date: seed.due_date ?? addDays(todayIso(), 30),
   }
 }
 
@@ -65,12 +65,11 @@ export function LogCloseDialog({
   const logClose = useLogClose()
 
   const [tier, setTier] = React.useState<TierKey>("fundament")
-  const [amountEuros, setAmountEuros] = React.useState<string>("997")
+  const [contractEuros, setContractEuros] = React.useState<string>("997")
+  const [paidNowEuros, setPaidNowEuros] = React.useState<string>("997")
   const [closerId, setCloserId] = React.useState<string>("")
   const [notes, setNotes] = React.useState<string>("")
-  const [installments, setInstallments] = React.useState<DraftInstallment[]>([
-    newDraft({ amount_cents: 99700, paid_today: true }),
-  ])
+  const [future, setFuture] = React.useState<DraftFuture[]>([])
   const [error, setError] = React.useState<string | null>(null)
 
   React.useEffect(() => {
@@ -80,11 +79,10 @@ export function LogCloseDialog({
     }
     const t = TIERS[0]
     setTier(t.key)
-    setAmountEuros(String(t.price_cents / 100))
+    setContractEuros(String(t.price_cents / 100))
+    setPaidNowEuros(String(t.price_cents / 100))
     setNotes("")
-    setInstallments([
-      newDraft({ amount_cents: t.price_cents, paid_today: true }),
-    ])
+    setFuture([])
     const initialCloser =
       defaultCloserId ??
       (profile?.role === "closer" || profile?.role === "admin" ? profile.id : "")
@@ -95,42 +93,40 @@ export function LogCloseDialog({
     setTier(key)
     const t = TIERS.find((x) => x.key === key)
     if (t) {
-      setAmountEuros(String(t.price_cents / 100))
-      setInstallments([newDraft({ amount_cents: t.price_cents, paid_today: true })])
+      setContractEuros(String(t.price_cents / 100))
+      setPaidNowEuros(String(t.price_cents / 100))
+      setFuture([])
     }
   }
 
-  function patchInstallment(uid: string, patch: Partial<DraftInstallment>) {
-    setInstallments((prev) => prev.map((i) => (i.uid === uid ? { ...i, ...patch } : i)))
+  function patchFuture(uid: string, patch: Partial<DraftFuture>) {
+    setFuture((prev) => prev.map((i) => (i.uid === uid ? { ...i, ...patch } : i)))
   }
 
-  function addInstallment() {
-    const last = installments[installments.length - 1]
-    setInstallments((prev) => [
+  function addFuturePayment() {
+    const last = future[future.length - 1]
+    setFuture((prev) => [
       ...prev,
-      newDraft({
+      newFuture({
         amount_cents: 0,
-        due_date: last ? addDays(last.due_date, 30) : todayIso(),
+        due_date: last ? addDays(last.due_date, 30) : addDays(todayIso(), 30),
       }),
     ])
   }
 
-  function removeInstallment(uid: string) {
-    setInstallments((prev) => (prev.length > 1 ? prev.filter((i) => i.uid !== uid) : prev))
+  function removeFuturePayment(uid: string) {
+    setFuture((prev) => prev.filter((i) => i.uid !== uid))
   }
 
-  const totalCents = Math.round((parseFloat(amountEuros || "0") || 0) * 100)
-  const scheduledCents = installments.reduce((s, i) => s + (i.amount_cents || 0), 0)
-  const paidNowCents = installments.reduce(
-    (s, i) => s + (i.paid_today ? i.amount_cents || 0 : 0),
-    0
-  )
-  const diff = totalCents - scheduledCents
+  const contractCents = Math.round((parseFloat(contractEuros || "0") || 0) * 100)
+  const paidNowCents = Math.round((parseFloat(paidNowEuros || "0") || 0) * 100)
+  const scheduledCents = future.reduce((s, i) => s + (i.amount_cents || 0), 0)
+  const outstandingCents = Math.max(0, contractCents - paidNowCents - scheduledCents)
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
-    if (totalCents <= 0) {
+    if (contractCents <= 0) {
       setError("Contract value must be greater than 0.")
       return
     }
@@ -138,17 +134,35 @@ export function LogCloseDialog({
       setError("Pick which closer logged this deal.")
       return
     }
-    if (installments.some((i) => i.amount_cents <= 0)) {
-      setError("Each installment needs an amount > €0.")
+    if (paidNowCents < 0) {
+      setError("Paid at close cannot be negative.")
       return
     }
-    if (scheduledCents !== totalCents) {
+    if (future.some((i) => i.amount_cents <= 0)) {
+      setError("Scheduled payments need an amount > €0.")
+      return
+    }
+    if (paidNowCents + scheduledCents > contractCents) {
       setError(
-        `Installments (${formatCurrency(scheduledCents)}) don't equal the contract value (${formatCurrency(
-          totalCents
-        )}).`
+        `Paid + scheduled (${formatCurrency(paidNowCents + scheduledCents)}) exceeds the contract value (${formatCurrency(contractCents)}).`
       )
       return
+    }
+
+    const installments: InstallmentInput[] = []
+    if (paidNowCents > 0) {
+      installments.push({
+        amount_cents: paidNowCents,
+        due_date: todayIso(),
+        paid_today: true,
+      })
+    }
+    for (const f of future) {
+      installments.push({
+        amount_cents: f.amount_cents,
+        due_date: f.due_date,
+        paid_today: false,
+      })
     }
 
     try {
@@ -156,17 +170,13 @@ export function LogCloseDialog({
         lead_id: leadId,
         closer_id: closerId,
         tier,
-        amount_cents: totalCents,
+        amount_cents: contractCents,
         notes: notes.trim() || null,
-        installments: installments.map((i) => ({
-          amount_cents: i.amount_cents,
-          due_date: i.due_date,
-          paid_today: i.paid_today,
-        })),
+        installments,
       })
       if (!result.slack.ok) {
         setError(
-          `Deal saved, but Slack alert failed: ${result.slack.error ?? "unknown error"}. Check the #payments webhook config.`
+          `Deal saved, but Slack alert failed: ${result.slack.error ?? "unknown error"}.`
         )
         return
       }
@@ -182,8 +192,9 @@ export function LogCloseDialog({
         <DialogHeader>
           <DialogTitle>Log close — {leadName}</DialogTitle>
           <DialogDescription>
-            Tier, contract value, and the custom payment schedule. Posts a deal-closed alert to
-            the #payments Slack channel on save.
+            Record the tier, contract value, and what the lead paid right now. Schedule the
+            rest later from the lead's Payment schedule section. Posts to #b-new-payment on
+            save.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit}>
@@ -204,18 +215,6 @@ export function LogCloseDialog({
                 </Select>
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="close-amount">Contract value (EUR)</Label>
-                <Input
-                  id="close-amount"
-                  type="number"
-                  inputMode="decimal"
-                  min="0"
-                  step="0.01"
-                  value={amountEuros}
-                  onChange={(e) => setAmountEuros(e.target.value)}
-                />
-              </div>
-              <div className="col-span-2 flex flex-col gap-1.5">
                 <Label htmlFor="close-closer">Closer</Label>
                 <Select
                   id="close-closer"
@@ -230,86 +229,110 @@ export function LogCloseDialog({
                   ))}
                 </Select>
               </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="close-contract">Contract value (EUR)</Label>
+                <Input
+                  id="close-contract"
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="0.01"
+                  value={contractEuros}
+                  onChange={(e) => setContractEuros(e.target.value)}
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="close-paid-now">Paid at close (EUR)</Label>
+                <Input
+                  id="close-paid-now"
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="0.01"
+                  value={paidNowEuros}
+                  onChange={(e) => setPaidNowEuros(e.target.value)}
+                />
+                <span className="text-[10px] text-[var(--color-muted-foreground)]">
+                  What the lead actually paid today. Leave equal to contract value if PIF.
+                </span>
+              </div>
             </div>
 
             <div className="mt-5 flex flex-col gap-2">
               <div className="flex items-center justify-between">
-                <Label>Payment schedule</Label>
-                <Button type="button" size="sm" variant="outline" onClick={addInstallment}>
+                <Label>Scheduled future payments (optional)</Label>
+                <Button type="button" size="sm" variant="outline" onClick={addFuturePayment}>
                   <Plus className="h-3.5 w-3.5" />
-                  Add payment
+                  Add scheduled payment
                 </Button>
               </div>
-              <div className="flex flex-col gap-2">
-                {installments.map((i, idx) => (
-                  <div
-                    key={i.uid}
-                    className="grid grid-cols-[28px_1fr_1fr_auto_28px] items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-muted)]/30 px-2 py-2"
-                  >
-                    <span className="text-xs font-medium text-[var(--color-muted-foreground)]">
-                      #{idx + 1}
-                    </span>
-                    <Input
-                      type="number"
-                      inputMode="decimal"
-                      min="0"
-                      step="0.01"
-                      placeholder="Amount"
-                      value={i.amount_cents ? (i.amount_cents / 100).toString() : ""}
-                      onChange={(e) =>
-                        patchInstallment(i.uid, {
-                          amount_cents: Math.round((parseFloat(e.target.value || "0") || 0) * 100),
-                        })
-                      }
-                    />
-                    <Input
-                      type="date"
-                      value={i.due_date}
-                      onChange={(e) => patchInstallment(i.uid, { due_date: e.target.value })}
-                    />
-                    <label className="flex items-center gap-2 text-xs text-[var(--color-muted-foreground)]">
-                      <Switch
-                        checked={i.paid_today}
-                        onCheckedChange={(v) => patchInstallment(i.uid, { paid_today: v })}
-                      />
-                      Paid
-                    </label>
-                    <Button
-                      type="button"
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => removeInstallment(i.uid)}
-                      disabled={installments.length <= 1}
-                      aria-label="Remove installment"
+              {future.length === 0 ? (
+                <div className="rounded-md border border-dashed border-[var(--color-border)] px-3 py-3 text-center text-xs text-[var(--color-muted-foreground)]">
+                  {outstandingCents > 0
+                    ? `${formatCurrency(outstandingCents)} outstanding — leave blank to track later, or add scheduled payments now.`
+                    : "No future payments — paid in full at close."}
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {future.map((i, idx) => (
+                    <div
+                      key={i.uid}
+                      className="grid grid-cols-[28px_1fr_1fr_28px] items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-muted)]/30 px-2 py-2"
                     >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                ))}
-              </div>
+                      <span className="text-xs font-medium text-[var(--color-muted-foreground)]">
+                        #{idx + 1}
+                      </span>
+                      <Input
+                        type="number"
+                        inputMode="decimal"
+                        min="0"
+                        step="0.01"
+                        placeholder="Amount"
+                        value={i.amount_cents ? (i.amount_cents / 100).toString() : ""}
+                        onChange={(e) =>
+                          patchFuture(i.uid, {
+                            amount_cents: Math.round(
+                              (parseFloat(e.target.value || "0") || 0) * 100
+                            ),
+                          })
+                        }
+                      />
+                      <Input
+                        type="date"
+                        value={i.due_date}
+                        onChange={(e) => patchFuture(i.uid, { due_date: e.target.value })}
+                      />
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => removeFuturePayment(i.uid)}
+                        aria-label="Remove scheduled payment"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <div className="mt-1 grid grid-cols-3 gap-3 text-xs text-[var(--color-muted-foreground)]">
                 <span>
-                  Scheduled:{" "}
-                  <span
-                    className={
-                      diff === 0
-                        ? "font-medium text-[var(--color-foreground)]"
-                        : "font-medium text-[var(--color-destructive)]"
-                    }
-                  >
-                    {formatCurrency(scheduledCents)}
-                  </span>
-                </span>
-                <span>
-                  Paid today:{" "}
+                  Paid at close:{" "}
                   <span className="font-medium text-[var(--color-foreground)]">
                     {formatCurrency(paidNowCents)}
                   </span>
                 </span>
                 <span>
+                  Scheduled:{" "}
+                  <span className="font-medium text-[var(--color-foreground)]">
+                    {formatCurrency(scheduledCents)}
+                  </span>
+                </span>
+                <span>
                   Outstanding:{" "}
                   <span className="font-medium text-[var(--color-foreground)]">
-                    {formatCurrency(Math.max(0, totalCents - paidNowCents))}
+                    {formatCurrency(outstandingCents)}
                   </span>
                 </span>
               </div>

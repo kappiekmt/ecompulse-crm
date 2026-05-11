@@ -1,8 +1,15 @@
 import * as React from "react"
-import { Check, CheckCircle2, Loader2 } from "lucide-react"
+import { Check, CheckCircle2, Loader2, Plus, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { useLeadDeal, useMarkInstallmentPaid, type InstallmentRow } from "@/lib/queries/closes"
+import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
+import {
+  useAddInstallment,
+  useLeadDeal,
+  useMarkInstallmentPaid,
+  type InstallmentRow,
+} from "@/lib/queries/closes"
 import { cn, formatCurrency } from "@/lib/utils"
 
 interface PaymentScheduleSectionProps {
@@ -28,11 +35,21 @@ function statusOf(row: InstallmentRow): "paid" | "due_today" | "overdue" | "upco
   return "upcoming"
 }
 
+function todayIso(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+}
+
 export function PaymentScheduleSection({ leadId }: PaymentScheduleSectionProps) {
   const deal = useLeadDeal(leadId)
   const markPaid = useMarkInstallmentPaid()
+  const addInstallment = useAddInstallment()
   const [pendingId, setPendingId] = React.useState<string | null>(null)
   const [slackError, setSlackError] = React.useState<string | null>(null)
+  const [adderOpen, setAdderOpen] = React.useState(false)
+  const [newAmountEuros, setNewAmountEuros] = React.useState<string>("")
+  const [newDueDate, setNewDueDate] = React.useState<string>(todayIso())
+  const [newPaidNow, setNewPaidNow] = React.useState<boolean>(true)
 
   if (deal.isLoading) {
     return (
@@ -81,23 +98,68 @@ export function PaymentScheduleSection({ leadId }: PaymentScheduleSectionProps) 
     }
   }
 
+  async function onAddInstallment(e: React.FormEvent) {
+    e.preventDefault()
+    if (!deal.data) return
+    const amountCents = Math.round((parseFloat(newAmountEuros || "0") || 0) * 100)
+    if (amountCents <= 0) {
+      setSlackError("Amount must be greater than 0.")
+      return
+    }
+    setSlackError(null)
+    try {
+      const r = await addInstallment.mutateAsync({
+        deal_id: deal.data.id,
+        lead_id: leadId,
+        amount_cents: amountCents,
+        due_date: newDueDate,
+        paid_now: newPaidNow,
+      })
+      if (!r.slack.ok) {
+        setSlackError(
+          `Saved, but Slack alert failed: ${r.slack.error ?? "unknown error"}.`
+        )
+      }
+      setNewAmountEuros("")
+      setNewDueDate(todayIso())
+      setNewPaidNow(true)
+      setAdderOpen(false)
+    } catch (err) {
+      setSlackError((err as Error).message)
+    }
+  }
+
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted-foreground)]">
           Payment schedule
         </span>
-        {allPaid && (
-          <Badge variant="success" className="text-[10px]">
-            <Check className="h-3 w-3" />
-            Fully paid
-          </Badge>
-        )}
+        <div className="flex items-center gap-2">
+          {allPaid && (
+            <Badge variant="success" className="text-[10px]">
+              <Check className="h-3 w-3" />
+              Fully paid
+            </Badge>
+          )}
+          {!allPaid && !adderOpen && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => setAdderOpen(true)}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add payment
+            </Button>
+          )}
+        </div>
       </div>
 
       {installments.length === 0 ? (
         <div className="rounded-md border border-dashed border-[var(--color-border)] px-3 py-3 text-center text-xs text-[var(--color-muted-foreground)]">
-          No installments recorded for this deal.
+          No installments recorded yet — outstanding {formatCurrency(outstanding)}. Click
+          "Add payment" to record one.
         </div>
       ) : (
         <div className="flex flex-col gap-1.5">
@@ -154,6 +216,61 @@ export function PaymentScheduleSection({ leadId }: PaymentScheduleSectionProps) 
             )
           })}
         </div>
+      )}
+
+      {adderOpen && (
+        <form
+          onSubmit={onAddInstallment}
+          className="flex flex-col gap-2 rounded-md border border-[var(--color-primary)]/40 bg-[var(--color-primary)]/5 px-3 py-3"
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold uppercase tracking-wider text-[var(--color-muted-foreground)]">
+              Add payment
+            </span>
+            <button
+              type="button"
+              onClick={() => setAdderOpen(false)}
+              aria-label="Cancel"
+              className="text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="grid grid-cols-[1fr_1fr_auto] items-center gap-2">
+            <Input
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="0.01"
+              placeholder="Amount (EUR)"
+              value={newAmountEuros}
+              onChange={(e) => setNewAmountEuros(e.target.value)}
+            />
+            <Input
+              type="date"
+              value={newDueDate}
+              onChange={(e) => setNewDueDate(e.target.value)}
+            />
+            <label className="flex items-center gap-2 text-xs text-[var(--color-muted-foreground)]">
+              <Switch checked={newPaidNow} onCheckedChange={setNewPaidNow} />
+              Paid now
+            </label>
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => setAdderOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" size="sm" disabled={addInstallment.isPending}>
+              {addInstallment.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+              {newPaidNow ? "Record payment + notify Slack" : "Schedule"}
+            </Button>
+          </div>
+        </form>
       )}
 
       <div className="mt-1 grid grid-cols-3 gap-3 text-xs text-[var(--color-muted-foreground)]">

@@ -58,3 +58,15 @@ verify_jwt = true
 # deal_installments row to paid from the lead drawer.
 [functions.notify-installment-paid]
 verify_jwt = true
+
+# Daily 09:00 Amsterdam — detects scheduled installments past their grace
+# period, flips them to status=failed, fires summary alert per closer to
+# #b-payment-failed. Service-role-callable from pg_cron.
+[functions.check-overdue-payments]
+verify_jwt = true
+
+# Daily 10:00 Amsterdam — walks failed installments and fires the
+# next-stage escalation (Day 1 reminder stub → Day 3 closer alert →
+# Day 7 admin escalation → Day 14 access pause). Idempotent.
+[functions.payment-recovery-sequence]
+verify_jwt = true

@@ -43,28 +43,6 @@ function jsonResponse(body: unknown, init: ResponseInit = {}) {
   })
 }
 
-/**
- * Recursively walks an arbitrary JSON value and returns the first string value
- * found at any key matching /signing.?key/i. Defensive in case Calendly nests
- * the field one level deeper than expected.
- */
-function deepFindSigningKey(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") return undefined
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const r = deepFindSigningKey(item)
-      if (r) return r
-    }
-    return undefined
-  }
-  for (const [k, v] of Object.entries(value)) {
-    if (/signing.?key/i.test(k) && typeof v === "string" && v) return v
-    const r = deepFindSigningKey(v)
-    if (r) return r
-  }
-  return undefined
-}
-
 async function calendlyApi<T>(
   method: "GET" | "POST" | "DELETE",
   path: string,
@@ -180,7 +158,13 @@ serve(async (req) => {
     }
   }
 
-  // 4. Create a new subscription.
+  // 4. Create a new subscription with a caller-provided signing_key. Calendly
+  // accepts the key but does not echo it back in the response, so we generate
+  // it locally and persist it ourselves.
+  const signingKey = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
+
   const createResp = await calendlyApi<Record<string, unknown>>(
     "POST",
     "/webhook_subscriptions",
@@ -190,6 +174,7 @@ serve(async (req) => {
       events: ["invitee.created", "invitee.canceled"],
       organization: orgUri,
       scope: "organization",
+      signing_key: signingKey,
     }
   )
   if (!createResp.ok) {
@@ -208,11 +193,6 @@ serve(async (req) => {
     )
   }
 
-  // Calendly's response shape has occasionally been observed in two forms:
-  //   { "resource": { "signing_key": "...", "uri": "..." } }
-  //   { "signing_key": "...", "uri": "..." }
-  // Probe both and fall back to a deep search for any "signing_key" field so
-  // we don't flake on minor response-shape changes.
   const responseAny = createResp.data as Record<string, unknown>
   const resource = (responseAny.resource ?? responseAny) as Record<string, unknown>
   const sub: CalendlySubscription = {
@@ -221,28 +201,10 @@ serve(async (req) => {
     events: (resource.events as string[]) ?? [],
     scope: (resource.scope as "organization" | "user") ?? "organization",
     state: (resource.state as "active" | "disabled") ?? "active",
-    signing_key: (resource.signing_key as string | undefined) ?? deepFindSigningKey(responseAny),
+    signing_key: signingKey,
   }
 
-  // Calendly's Standard tier creates the webhook but doesn't return a
-  // signing_key (signing is a Premium-tier feature). When that happens we still
-  // accept the connection; the webhook receiver falls back to "no signature
-  // verification" mode and relies on the URL being secret + payload-shape
-  // sanity checks. Document this clearly to the admin.
-  const signingDisabled = !sub.signing_key
-
-  if (signingDisabled) {
-    await logIntegration(supabase, {
-      provider: "calendly",
-      direction: "outbound",
-      event_type: "setup.no_signing_key",
-      status: "success",
-      request_payload: { url: callbackUrl, organization: orgUri } as never,
-      response_payload: responseAny as never,
-      error:
-        "Calendly response missing signing_key — Standard tier doesn't include webhook signing. Proceeding without HMAC verification.",
-    })
-  }
+  const signingDisabled = false
 
   // 5. Persist into integration_configs.
   const { error: cfgErr } = await supabase
@@ -285,9 +247,7 @@ serve(async (req) => {
     subscription_uri: sub.uri,
     callback_url: callbackUrl,
     events: sub.events,
-    signing_disabled: signingDisabled,
-    warning: signingDisabled
-      ? "Calendly Standard doesn't return a webhook signing key, so signature verification is disabled. Bookings will still flow into the CRM. To enable HMAC verification, upgrade to a Calendly tier that supports it."
-      : null,
+    signing_disabled: false,
+    warning: null,
   })
 })

@@ -189,11 +189,13 @@ serve(async (req) => {
           ]
         : []),
       {
-        type: "context",
+        type: "actions",
         elements: [
           {
-            type: "mrkdwn",
-            text: `<${leadDeepLink(deal.lead_id)}|Open lead in CRM>`,
+            type: "button",
+            text: { type: "plain_text", text: "Open in CRM", emoji: true },
+            url: leadDeepLink(deal.lead_id),
+            style: "primary",
           },
         ],
       },

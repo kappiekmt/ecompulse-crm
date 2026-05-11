@@ -391,6 +391,15 @@ async function handleEvents(req: Request): Promise<Response> {
 
 // ---------- Interactivity (buttons / modals) ----------
 
+interface BlockActionsPayload {
+  type: string
+  user: { id: string; name?: string }
+  actions: { action_id: string; value?: string }[]
+  response_url?: string
+  message?: { ts?: string; channel?: string; text?: string }
+  channel?: { id: string }
+}
+
 async function handleInteractivity(req: Request): Promise<Response> {
   const rawBody = await req.text()
 
@@ -403,11 +412,104 @@ async function handleInteractivity(req: Request): Promise<Response> {
   if (!valid) return new Response("invalid signature", { status: 401 })
 
   const form = parseForm(rawBody)
-  const payload = JSON.parse(form.payload ?? "{}") as { type: string }
+  const payload = JSON.parse(form.payload ?? "{}") as BlockActionsPayload
 
-  // Stub — no interactive components shipped yet in Phase 1.
-  console.log("[slack-app] interactivity received:", payload.type)
+  if (payload.type !== "block_actions") {
+    console.log("[slack-app] interactivity received non-block_actions:", payload.type)
+    return new Response("", { status: 200 })
+  }
+
+  for (const action of payload.actions ?? []) {
+    const id = action.action_id ?? ""
+    if (id.startsWith("recovery.contacted:") || id.startsWith("recovery.unreachable:")) {
+      queueMicrotask(() =>
+        handleRecoveryAction(id, payload).catch((e) =>
+          console.error("[recovery action]", e)
+        )
+      )
+    }
+  }
+
   return new Response("", { status: 200 })
+}
+
+async function handleRecoveryAction(actionId: string, payload: BlockActionsPayload) {
+  const [prefix, installmentId] = actionId.split(":")
+  if (!installmentId) return
+  const eventType =
+    prefix === "recovery.contacted"
+      ? "closer_contacted_customer"
+      : "closer_unable_to_reach"
+  const slackUserId = payload.user?.id
+
+  const supabase = adminClient()
+
+  const { data: member } = await supabase
+    .from("team_members")
+    .select("id, full_name")
+    .eq("slack_user_id", slackUserId)
+    .maybeSingle()
+
+  const { data: inst } = await supabase
+    .from("deal_installments")
+    .select("id, deal_id, deal:deals(lead_id)")
+    .eq("id", installmentId)
+    .maybeSingle()
+  if (!inst) {
+    await ackResponse(payload, ":x: Couldn't find that installment.")
+    return
+  }
+  const leadId = (inst.deal as { lead_id: string } | null)?.lead_id ?? null
+  if (!leadId) {
+    await ackResponse(payload, ":x: Installment has no associated lead.")
+    return
+  }
+
+  await supabase.from("payment_recovery_events").insert({
+    installment_id: installmentId,
+    deal_id: inst.deal_id,
+    lead_id: leadId,
+    event_type: eventType,
+    actor_team_member_id: member?.id ?? null,
+    is_system: false,
+    metadata: {
+      via: "slack_button",
+      slack_user_id: slackUserId,
+      slack_user_name: payload.user?.name ?? null,
+    },
+  })
+
+  const actorLabel = member?.full_name ?? `<@${slackUserId}>`
+  const verb =
+    eventType === "closer_contacted_customer"
+      ? "marked as *contacted*"
+      : "marked as *unable to reach*"
+  await ackResponse(
+    payload,
+    `:white_check_mark: ${actorLabel} ${verb}. Logged at ${new Date().toISOString().slice(11, 16)} UTC.`
+  )
+
+  await logIntegration(supabase, {
+    provider: "slack",
+    direction: "inbound",
+    event_type: `recovery.button.${eventType}`,
+    status: "success",
+    related_lead_id: leadId,
+    request_payload: { installment_id: installmentId, slack_user_id: slackUserId },
+  })
+}
+
+async function ackResponse(payload: BlockActionsPayload, text: string) {
+  if (!payload.response_url) return
+  await fetch(payload.response_url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      replace_original: false,
+      response_type: "in_channel",
+      text,
+    }),
+  })
 }
 
 // ---------- Router ----------

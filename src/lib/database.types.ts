@@ -113,6 +113,36 @@ export interface Database {
         amount_cents: number
         due_date: string
         paid_at: string | null
+        status: "scheduled" | "paid" | "failed" | "recovering" | "written_off" | "refunded"
+        failed_at: string | null
+        failure_reason: string | null
+        recovery_attempts: number
+        last_recovery_attempt_at: string | null
+        grace_period_days: number
+        written_off_at: string | null
+        written_off_by: string | null
+        created_at: string
+      }>
+      payment_recovery_events: Tbl<{
+        id: string
+        installment_id: string
+        deal_id: string
+        lead_id: string
+        event_type:
+          | "overdue_detected"
+          | "reminder_sent"
+          | "closer_notified"
+          | "admin_escalated"
+          | "access_paused"
+          | "access_resumed"
+          | "resolved"
+          | "written_off"
+          | "marked_recovering"
+          | "closer_contacted_customer"
+          | "closer_unable_to_reach"
+        actor_team_member_id: string | null
+        is_system: boolean
+        metadata: Json | null
         created_at: string
       }>
       students: Tbl<{
@@ -128,6 +158,7 @@ export interface Database {
         discord_invite_expires_at: string | null
         onboarding_status: "pending" | "in_progress" | "complete"
         onboarding_checklist: Json | null
+        payment_status: "active" | "paused_payment" | "reactivated" | "churned"
         enrolled_at: string
         updated_at: string
       }>

@@ -130,12 +130,47 @@ export function useLogClose() {
 
 // ─── Lead → deal + installments ────────────────────────────────────────────
 
+export type InstallmentStatus =
+  | "scheduled"
+  | "paid"
+  | "failed"
+  | "recovering"
+  | "written_off"
+  | "refunded"
+
 export interface InstallmentRow {
   id: string
   seq: number
   amount_cents: number
   due_date: string
   paid_at: string | null
+  status: InstallmentStatus
+  failed_at: string | null
+  failure_reason: string | null
+  written_off_at: string | null
+}
+
+export type RecoveryEventType =
+  | "overdue_detected"
+  | "reminder_sent"
+  | "closer_notified"
+  | "admin_escalated"
+  | "access_paused"
+  | "access_resumed"
+  | "resolved"
+  | "written_off"
+  | "marked_recovering"
+  | "closer_contacted_customer"
+  | "closer_unable_to_reach"
+
+export interface RecoveryEventRow {
+  id: string
+  installment_id: string
+  event_type: RecoveryEventType
+  is_system: boolean
+  metadata: Record<string, unknown> | null
+  created_at: string
+  actor: { full_name: string } | null
 }
 
 export interface LeadDeal {
@@ -146,6 +181,7 @@ export interface LeadDeal {
   notes: string | null
   closed_at: string | null
   installments: InstallmentRow[]
+  events: RecoveryEventRow[]
 }
 
 export function useLeadDeal(leadId: string | null) {
@@ -165,13 +201,25 @@ export function useLeadDeal(leadId: string | null) {
 
       const { data: inst } = await supabase
         .from("deal_installments")
-        .select("id, seq, amount_cents, due_date, paid_at")
+        .select(
+          "id, seq, amount_cents, due_date, paid_at, status, failed_at, failure_reason, written_off_at"
+        )
         .eq("deal_id", deal.id)
         .order("seq", { ascending: true })
+
+      const { data: events } = await supabase
+        .from("payment_recovery_events")
+        .select(
+          "id, installment_id, event_type, is_system, metadata, created_at, " +
+            "actor:team_members!payment_recovery_events_actor_team_member_id_fkey(full_name)"
+        )
+        .eq("deal_id", deal.id)
+        .order("created_at", { ascending: true })
 
       return {
         ...deal,
         installments: (inst ?? []) as InstallmentRow[],
+        events: (events ?? []) as unknown as RecoveryEventRow[],
       } as LeadDeal
     },
   })
@@ -301,6 +349,161 @@ export function useAddInstallment() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["lead-deal"] })
       qc.invalidateQueries({ queryKey: ["lead-payments"] })
+    },
+  })
+}
+
+// ─── Admin recovery actions ────────────────────────────────────────────────
+
+interface RecoveryActionInput {
+  installment_id: string
+  deal_id: string
+  lead_id: string
+  action: "mark_recovering" | "write_off"
+  note?: string
+}
+
+async function recoveryAction(input: RecoveryActionInput) {
+  const nowIso = new Date().toISOString()
+
+  const { data: me } = await supabase
+    .from("team_members")
+    .select("id")
+    .limit(1)
+    .maybeSingle()
+
+  if (input.action === "mark_recovering") {
+    const { error } = await supabase
+      .from("deal_installments")
+      .update({
+        status: "recovering",
+        last_recovery_attempt_at: nowIso,
+        failure_reason: input.note ?? null,
+      })
+      .eq("id", input.installment_id)
+    if (error) throw new Error(error.message)
+
+    await supabase.from("payment_recovery_events").insert({
+      installment_id: input.installment_id,
+      deal_id: input.deal_id,
+      lead_id: input.lead_id,
+      event_type: "marked_recovering",
+      actor_team_member_id: me?.id ?? null,
+      is_system: false,
+      metadata: { note: input.note ?? null },
+    })
+    return { ok: true }
+  }
+
+  if (input.action === "write_off") {
+    if (!input.note?.trim()) {
+      throw new Error("Write-off requires a reason.")
+    }
+    const { error } = await supabase
+      .from("deal_installments")
+      .update({
+        status: "written_off",
+        written_off_at: nowIso,
+        written_off_by: me?.id ?? null,
+        failure_reason: input.note,
+      })
+      .eq("id", input.installment_id)
+    if (error) throw new Error(error.message)
+
+    await supabase.from("payment_recovery_events").insert({
+      installment_id: input.installment_id,
+      deal_id: input.deal_id,
+      lead_id: input.lead_id,
+      event_type: "written_off",
+      actor_team_member_id: me?.id ?? null,
+      is_system: false,
+      metadata: { reason: input.note },
+    })
+    return { ok: true }
+  }
+
+  return { ok: false }
+}
+
+export function useRecoveryAction() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: recoveryAction,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["lead-deal"] })
+      qc.invalidateQueries({ queryKey: ["lead-student"] })
+    },
+  })
+}
+
+// ─── Student access (pause / resume) ───────────────────────────────────────
+
+export interface LeadStudent {
+  id: string
+  payment_status: "active" | "paused_payment" | "reactivated" | "churned"
+  discord_user_id: string | null
+  whop_membership_id: string | null
+}
+
+export function useLeadStudent(leadId: string | null) {
+  return useQuery<LeadStudent | null>({
+    queryKey: ["lead-student", leadId],
+    enabled: isSupabaseConfigured && Boolean(leadId),
+    queryFn: async () => {
+      if (!leadId) return null
+      const { data } = await supabase
+        .from("students")
+        .select("id, payment_status, discord_user_id, whop_membership_id")
+        .eq("lead_id", leadId)
+        .maybeSingle()
+      return (data as LeadStudent | null) ?? null
+    },
+  })
+}
+
+async function resumeAccess(input: { student_id: string; lead_id: string }) {
+  const nowIso = new Date().toISOString()
+
+  const { data: me } = await supabase
+    .from("team_members")
+    .select("id")
+    .limit(1)
+    .maybeSingle()
+
+  const { error } = await supabase
+    .from("students")
+    .update({ payment_status: "reactivated" })
+    .eq("id", input.student_id)
+  if (error) throw new Error(error.message)
+
+  const { data: failedInst } = await supabase
+    .from("deal_installments")
+    .select("id, deal_id")
+    .eq("status", "failed")
+    .limit(1)
+  const ref = failedInst?.[0]
+
+  if (ref) {
+    await supabase.from("payment_recovery_events").insert({
+      installment_id: ref.id,
+      deal_id: ref.deal_id,
+      lead_id: input.lead_id,
+      event_type: "access_resumed",
+      actor_team_member_id: me?.id ?? null,
+      is_system: false,
+      metadata: { student_id: input.student_id, at: nowIso },
+    })
+  }
+  return { ok: true }
+}
+
+export function useResumeAccess() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: resumeAccess,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["lead-student"] })
+      qc.invalidateQueries({ queryKey: ["lead-deal"] })
     },
   })
 }

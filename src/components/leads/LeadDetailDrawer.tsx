@@ -39,6 +39,7 @@ import { cn, formatCurrency, formatDateTime } from "@/lib/utils"
 import { TIERS } from "@/lib/tiers"
 import { ContactForm } from "@/components/ContactForm"
 import { LogCloseDialog } from "@/components/leads/LogCloseDialog"
+import { PaymentScheduleSection } from "@/components/leads/PaymentScheduleSection"
 
 interface LeadDetailDrawerProps {
   leadId: string | null
@@ -306,6 +307,9 @@ function Inner({ leadId, onClose }: { leadId: string; onClose: () => void }) {
             />
           </div>
         </Section>
+
+        {/* PAYMENT SCHEDULE (installments) */}
+        <PaymentScheduleSection leadId={l.id} />
 
         {/* PAYMENTS */}
         <PaymentsSection

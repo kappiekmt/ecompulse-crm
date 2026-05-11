@@ -53,3 +53,8 @@ verify_jwt = true
 # the deal regardless of the caller's RLS scope.
 [functions.notify-deal-closed]
 verify_jwt = true
+
+# Installment-paid Slack alert — fired when a closer flips a single
+# deal_installments row to paid from the lead drawer.
+[functions.notify-installment-paid]
+verify_jwt = true

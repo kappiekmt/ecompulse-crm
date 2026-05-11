@@ -568,6 +568,22 @@ function InstallmentCard({
               </span>
             )}
           </span>
+          {row.commission && row.status === "paid" && (
+            <span className="text-[10px] text-[var(--color-muted-foreground)]">
+              +{formatCurrency(row.commission.commission_amount_cents)} commission
+              {row.commission.closer_name && (
+                <span className="opacity-70"> · {row.commission.closer_name}</span>
+              )}
+              {row.commission.status === "clawed_back" && (
+                <span className="ml-1 font-medium text-[var(--color-destructive)]">
+                  · clawed back
+                </span>
+              )}
+              {row.commission.status === "paid_out" && (
+                <span className="ml-1 text-[var(--color-success)]">· paid out</span>
+              )}
+            </span>
+          )}
         </div>
 
         <Badge variant={badgeVariantFor(row.status)} className="text-[10px]">

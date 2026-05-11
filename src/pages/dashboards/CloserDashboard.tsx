@@ -6,6 +6,11 @@ import { Badge } from "@/components/ui/badge"
 import { StatCard } from "@/components/StatCard"
 import { LeadDetailDrawer } from "@/components/leads/LeadDetailDrawer"
 import { StageBadge } from "@/components/leads/StageBadge"
+import {
+  CommissionKpiCards,
+  OutstandingDealsTable,
+  RecentCommissionsAndLedger,
+} from "@/components/dashboard/CommissionSections"
 import { useAuth } from "@/lib/auth"
 import { cn, formatCurrency } from "@/lib/utils"
 import {
@@ -63,6 +68,12 @@ export function CloserDashboard() {
       </header>
 
       <div className="flex flex-col gap-6 p-8">
+        {/* Commission KPIs */}
+        <CommissionKpiCards leadsToday={todayCalls.data?.length ?? 0} />
+
+        {/* Money still coming — won deals with outstanding balance */}
+        <OutstandingDealsTable onOpenLead={setActiveId} />
+
         {/* Today's calls — the top priority for a closer */}
         <Card>
           <CardContent className="flex flex-col gap-4 p-6">
@@ -179,6 +190,9 @@ export function CloserDashboard() {
             value={formatCurrency(stats.data?.aov_cents ?? 0)}
           />
         </div>
+
+        {/* Recent commissions + ledger */}
+        <RecentCommissionsAndLedger onOpenLead={setActiveId} />
 
         {/* My pipeline */}
         <Card>

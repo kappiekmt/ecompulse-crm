@@ -70,3 +70,17 @@ verify_jwt = true
 # Day 7 admin escalation → Day 14 access pause). Idempotent.
 [functions.payment-recovery-sequence]
 verify_jwt = true
+
+# Every 15 min — refreshes closer_stats_daily materialized view via RPC.
+[functions.refresh-closer-stats]
+verify_jwt = true
+
+# Closer DM with commission breakdown after each payment. App-triggered
+# from closes.ts after the payment row is inserted.
+[functions.notify-commission-earned]
+verify_jwt = true
+
+# Monday 09:00 Amsterdam — weekly closer recap DM with prior-4-week
+# baseline + Claude coaching note.
+[functions.weekly-closer-recap]
+verify_jwt = true

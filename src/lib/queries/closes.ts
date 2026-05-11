@@ -31,6 +31,27 @@ const TIER_TO_ENUM: Record<TierKey, CoachingTier> = {
   nick_1_on_1: "nick_1_on_1",
 }
 
+async function notifyCommissionEarned(payment_id: string) {
+  try {
+    const { data: sess } = await supabase.auth.getSession()
+    const jwt = sess.session?.access_token
+    if (!jwt) return
+    await fetch(
+      `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/notify-commission-earned`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${jwt}`,
+        },
+        body: JSON.stringify({ payment_id }),
+      }
+    )
+  } catch (err) {
+    console.warn("[notifyCommissionEarned] failed:", (err as Error).message)
+  }
+}
+
 const TIER_TO_PROGRAM: Record<TierKey, string> = {
   fundament: "Fundament",
   groepscoaching: "Groepscoaching",
@@ -69,11 +90,24 @@ async function logClose(input: LogCloseInput): Promise<LogCloseResult> {
     const { error: instErr } = await supabase.from("deal_installments").insert(rows)
     if (instErr) throw new Error(`Deal saved but installments failed: ${instErr.message}`)
 
+    // Need the inserted installment IDs so payments can link back
+    const { data: insertedInst } = await supabase
+      .from("deal_installments")
+      .select("id, seq, paid_at")
+      .eq("deal_id", deal.id)
+      .order("seq", { ascending: true })
+    const paidByseq = new Map<number, string>(
+      (insertedInst ?? [])
+        .filter((i) => i.paid_at !== null)
+        .map((i) => [i.seq, i.id])
+    )
     const paidRows = input.installments
-      .filter((i) => i.paid_today)
-      .map((i) => ({
+      .map((i, idx) => ({ i, seq: idx + 1 }))
+      .filter(({ i }) => i.paid_today)
+      .map(({ i, seq }) => ({
         lead_id: input.lead_id,
         deal_id: deal.id,
+        installment_id: paidByseq.get(seq) ?? null,
         amount_cents: i.amount_cents,
         currency: "EUR",
         paid_at: nowIso,
@@ -138,6 +172,13 @@ export type InstallmentStatus =
   | "written_off"
   | "refunded"
 
+export interface CommissionPerInstallment {
+  commission_amount_cents: number
+  commission_rate: number
+  status: "earned" | "paid_out" | "clawed_back" | "adjusted"
+  closer_name: string | null
+}
+
 export interface InstallmentRow {
   id: string
   seq: number
@@ -148,6 +189,7 @@ export interface InstallmentRow {
   failed_at: string | null
   failure_reason: string | null
   written_off_at: string | null
+  commission?: CommissionPerInstallment | null
 }
 
 export type RecoveryEventType =
@@ -216,9 +258,43 @@ export function useLeadDeal(leadId: string | null) {
         .eq("deal_id", deal.id)
         .order("created_at", { ascending: true })
 
+      const { data: commissions } = await supabase
+        .from("commission_records")
+        .select(
+          "installment_id, commission_amount_cents, commission_rate, status, " +
+            "closer:team_members!commission_records_closer_id_fkey(full_name)"
+        )
+        .eq("deal_id", deal.id)
+
+      type CommissionRow = {
+        installment_id: string | null
+        commission_amount_cents: number
+        commission_rate: number
+        status: CommissionPerInstallment["status"]
+        closer: { full_name?: string } | null
+      }
+      const commissionByInstallment = new Map<string, CommissionPerInstallment>()
+      for (const c of (commissions ?? []) as unknown as CommissionRow[]) {
+        if (c.installment_id) {
+          commissionByInstallment.set(c.installment_id, {
+            commission_amount_cents: c.commission_amount_cents,
+            commission_rate: c.commission_rate,
+            status: c.status,
+            closer_name: c.closer?.full_name ?? null,
+          })
+        }
+      }
+
+      const installmentsWithCommission = ((inst ?? []) as InstallmentRow[]).map(
+        (row) => ({
+          ...row,
+          commission: commissionByInstallment.get(row.id) ?? null,
+        })
+      )
+
       return {
         ...deal,
-        installments: (inst ?? []) as InstallmentRow[],
+        installments: installmentsWithCommission,
         events: (events ?? []) as unknown as RecoveryEventRow[],
       } as LeadDeal
     },
@@ -242,16 +318,24 @@ async function markInstallmentPaid(input: MarkPaidInput) {
     .is("paid_at", null)
   if (instErr) throw new Error(instErr.message)
 
-  const { error: payErr } = await supabase.from("payments").insert({
-    lead_id: input.lead_id,
-    deal_id: input.deal_id,
-    amount_cents: input.amount_cents,
-    currency: "EUR",
-    paid_at: nowIso,
-    source: "manual",
-    is_refund: false,
-  })
+  const { data: payment, error: payErr } = await supabase
+    .from("payments")
+    .insert({
+      lead_id: input.lead_id,
+      deal_id: input.deal_id,
+      installment_id: input.installment_id,
+      amount_cents: input.amount_cents,
+      currency: "EUR",
+      paid_at: nowIso,
+      source: "manual",
+      is_refund: false,
+    })
+    .select("id")
+    .single()
   if (payErr) console.warn("[markInstallmentPaid] payments insert failed:", payErr.message)
+  if (payment?.id) {
+    void notifyCommissionEarned(payment.id)
+  }
 
   const { data: sess } = await supabase.auth.getSession()
   const jwt = sess.session?.access_token
@@ -313,16 +397,24 @@ async function addInstallment(input: AddInstallmentInput) {
   if (insErr || !inserted) throw new Error(insErr?.message ?? "Failed to add installment")
 
   if (input.paid_now) {
-    const { error: payErr } = await supabase.from("payments").insert({
-      lead_id: input.lead_id,
-      deal_id: input.deal_id,
-      amount_cents: input.amount_cents,
-      currency: "EUR",
-      paid_at: nowIso,
-      source: "manual",
-      is_refund: false,
-    })
+    const { data: payment, error: payErr } = await supabase
+      .from("payments")
+      .insert({
+        lead_id: input.lead_id,
+        deal_id: input.deal_id,
+        installment_id: inserted.id,
+        amount_cents: input.amount_cents,
+        currency: "EUR",
+        paid_at: nowIso,
+        source: "manual",
+        is_refund: false,
+      })
+      .select("id")
+      .single()
     if (payErr) console.warn("[addInstallment] payments insert failed:", payErr.message)
+    if (payment?.id) {
+      void notifyCommissionEarned(payment.id)
+    }
 
     const { data: sess } = await supabase.auth.getSession()
     const jwt = sess.session?.access_token

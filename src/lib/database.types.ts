@@ -51,6 +51,8 @@ export interface Database {
         slack_user_id: string | null
         timezone: string | null
         commission_pct: number | null
+        commission_rate_updated_at: string | null
+        commission_rate_updated_by: string | null
         capacity: number | null
         is_active: boolean
         created_at: string
@@ -121,6 +123,38 @@ export interface Database {
         grace_period_days: number
         written_off_at: string | null
         written_off_by: string | null
+        created_at: string
+      }>
+      commission_records: Tbl<{
+        id: string
+        payment_id: string
+        installment_id: string | null
+        deal_id: string
+        lead_id: string
+        closer_id: string
+        payment_amount_cents: number
+        commission_rate: number
+        commission_amount_cents: number
+        status: "earned" | "paid_out" | "clawed_back" | "adjusted"
+        earned_at: string
+        paid_out_at: string | null
+        paid_out_by: string | null
+        payout_reference: string | null
+        clawback_reason: string | null
+        clawed_back_at: string | null
+        notes: string | null
+        created_at: string
+        updated_at: string
+      }>
+      commission_adjustments: Tbl<{
+        id: string
+        closer_id: string
+        commission_record_id: string | null
+        adjustment_type: "bonus" | "spiff" | "correction" | "clawback" | "penalty"
+        amount_cents: number
+        reason: string
+        applied_to_period: string
+        created_by: string
         created_at: string
       }>
       payment_recovery_events: Tbl<{
@@ -201,6 +235,7 @@ export interface Database {
       payments: Tbl<{
         id: string
         lead_id: string | null
+        installment_id: string | null
         deal_id: string | null
         amount_cents: number
         currency: string
@@ -391,6 +426,19 @@ export interface Database {
       >
     }
     Views: {
+      deal_commission_summary: Vw<{
+        deal_id: string
+        lead_id: string
+        closer_id: string
+        contract_amount_cents: number
+        cash_collected_cents: number
+        commission_earned_cents: number
+        outstanding_cents: number
+        current_rate: number
+        projected_remaining_commission_cents: number
+        payments_received_count: number
+        installments_planned: number
+      }>
       api_keys_safe_v: Vw<{
         id: string
         name: string

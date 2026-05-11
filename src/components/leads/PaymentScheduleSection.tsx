@@ -129,38 +129,62 @@ export function PaymentScheduleSection({ leadId }: PaymentScheduleSectionProps) 
     }
   }
 
+  const pct = total > 0 ? Math.min(100, Math.round((paid / total) * 100)) : 0
+
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted-foreground)]">
           Payment schedule
         </span>
-        <div className="flex items-center gap-2">
-          {allPaid && (
-            <Badge variant="success" className="text-[10px]">
-              <Check className="h-3 w-3" />
-              Fully paid
-            </Badge>
-          )}
-          {!allPaid && !adderOpen && (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => setAdderOpen(true)}
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Add payment
-            </Button>
-          )}
+        {allPaid && (
+          <Badge variant="success" className="text-[10px]">
+            <Check className="h-3 w-3" />
+            Fully paid
+          </Badge>
+        )}
+      </div>
+
+      {/* Summary block: contract, progress bar, paid / remaining */}
+      <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-muted)]/30 px-4 py-3">
+        <div className="flex items-baseline justify-between">
+          <span className="text-xs text-[var(--color-muted-foreground)]">Contract</span>
+          <span className="text-lg font-semibold tabular-nums">
+            {formatCurrency(total)}
+          </span>
+        </div>
+        <div className="h-2 overflow-hidden rounded-full bg-[var(--color-border)]">
+          <div
+            className={cn(
+              "h-full transition-all",
+              allPaid ? "bg-[var(--color-success)]" : "bg-[var(--color-primary)]"
+            )}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <div className="flex items-baseline justify-between text-xs">
+          <span className="text-[var(--color-muted-foreground)]">
+            <span className="font-medium text-[var(--color-foreground)]">
+              {formatCurrency(paid)}
+            </span>{" "}
+            paid
+          </span>
+          <span className="text-[var(--color-muted-foreground)]">
+            {pct}%
+          </span>
+          <span className="text-[var(--color-muted-foreground)]">
+            <span className="font-medium text-[var(--color-foreground)]">
+              {formatCurrency(outstanding)}
+            </span>{" "}
+            outstanding
+          </span>
         </div>
       </div>
 
       {installments.length === 0 ? (
-        <div className="rounded-md border border-dashed border-[var(--color-border)] px-3 py-3 text-center text-xs text-[var(--color-muted-foreground)]">
-          No installments recorded yet — outstanding {formatCurrency(outstanding)}. Click
-          "Add payment" to record one.
-        </div>
+        <p className="text-center text-xs text-[var(--color-muted-foreground)]">
+          No payments recorded yet for this deal.
+        </p>
       ) : (
         <div className="flex flex-col gap-1.5">
           {installments.map((row) => {
@@ -273,33 +297,17 @@ export function PaymentScheduleSection({ leadId }: PaymentScheduleSectionProps) 
         </form>
       )}
 
-      <div className="mt-1 grid grid-cols-3 gap-3 text-xs text-[var(--color-muted-foreground)]">
-        <span>
-          Contract:{" "}
-          <span className="font-medium text-[var(--color-foreground)]">
-            {formatCurrency(total)}
-          </span>
-        </span>
-        <span>
-          Paid:{" "}
-          <span className="font-medium text-[var(--color-foreground)]">
-            {formatCurrency(paid)}
-          </span>
-        </span>
-        <span>
-          Outstanding:{" "}
-          <span
-            className={cn(
-              "font-medium",
-              outstanding > 0
-                ? "text-[var(--color-foreground)]"
-                : "text-[var(--color-muted-foreground)]"
-            )}
-          >
-            {formatCurrency(outstanding)}
-          </span>
-        </span>
-      </div>
+      {!allPaid && !adderOpen && (
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => setAdderOpen(true)}
+          className="w-full"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Add payment
+        </Button>
+      )}
 
       {slackError && (
         <p className="text-xs text-[var(--color-destructive)]">{slackError}</p>

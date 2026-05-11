@@ -4,10 +4,8 @@ import {
   CalendarClock,
   CheckCircle2,
   Loader2,
-  Plus,
   Trash2,
 } from "lucide-react"
-import { useQueryClient } from "@tanstack/react-query"
 import {
   Sheet,
   SheetBody,
@@ -23,7 +21,6 @@ import { Select } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { QUICK_PICK_STAGES, stageLabel } from "@/components/leads/StageBadge"
 import {
-  useAddPayment,
   useDeleteLead,
   useLead,
   useLeadPayments,
@@ -58,7 +55,6 @@ export function LeadDetailDrawer({ leadId, onClose }: LeadDetailDrawerProps) {
 }
 
 function Inner({ leadId, onClose }: { leadId: string; onClose: () => void }) {
-  const qc = useQueryClient()
   const lead = useLead(leadId)
   const closers = useTeamMembers("closer")
   const setters = useTeamMembers("setter")
@@ -311,12 +307,8 @@ function Inner({ leadId, onClose }: { leadId: string; onClose: () => void }) {
         {/* PAYMENT SCHEDULE (installments) */}
         <PaymentScheduleSection leadId={l.id} />
 
-        {/* PAYMENTS */}
-        <PaymentsSection
-          leadId={l.id}
-          payments={(payments.data ?? []) as PaymentRow[]}
-          onChanged={() => qc.invalidateQueries({ queryKey: ["lead-payments", l.id] })}
-        />
+        {/* PAYMENTS — read-only ledger of actual cash receipts (Stripe + manual + refunds) */}
+        <PaymentsSection payments={(payments.data ?? []) as PaymentRow[]} />
 
         {/* NOTES */}
         <Section label="Notes">
@@ -373,122 +365,47 @@ interface PaymentRow {
   notes: string | null
 }
 
-function PaymentsSection({
-  leadId,
-  payments,
-  onChanged,
-}: {
-  leadId: string
-  payments: PaymentRow[]
-  onChanged: () => void
-}) {
-  const add = useAddPayment()
-  const [adding, setAdding] = React.useState(false)
-  const [amount, setAmount] = React.useState("")
-  const [notes, setNotes] = React.useState("")
+function PaymentsSection({ payments }: { payments: PaymentRow[] }) {
+  if (payments.length === 0) return null
 
   const total = payments.reduce(
     (sum, p) => sum + (p.is_refund ? -p.amount_cents : p.amount_cents),
     0
   )
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault()
-    const cents = Math.round(parseFloat(amount) * 100)
-    if (!Number.isFinite(cents) || cents <= 0) return
-    await add.mutateAsync({
-      leadId,
-      amount_cents: cents,
-      notes: notes.trim() || null,
-    })
-    setAmount("")
-    setNotes("")
-    setAdding(false)
-    onChanged()
-  }
-
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted-foreground)]">
-          Payments
+          Payment history
         </span>
         <span className="text-sm font-semibold tabular-nums">
           {formatCurrency(total)}
         </span>
       </div>
-
-      {!adding && (
-        <button
-          type="button"
-          onClick={() => setAdding(true)}
-          className="inline-flex items-center justify-center gap-1 rounded-md py-2 text-xs font-medium text-[var(--color-primary)] hover:underline"
-        >
-          <Plus className="h-3.5 w-3.5" /> Add payment
-        </button>
-      )}
-
-      {adding && (
-        <form onSubmit={submit} className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] p-3">
-          <div className="grid grid-cols-2 gap-2">
-            <Input
-              type="number"
-              step="0.01"
-              min="0"
-              placeholder="Amount (EUR)"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              autoFocus
-            />
-            <Input
-              placeholder="Notes (optional)"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-            />
-          </div>
-          <div className="flex items-center justify-end gap-2">
-            <Button type="button" variant="ghost" size="sm" onClick={() => setAdding(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" size="sm" disabled={add.isPending}>
-              {add.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              Save payment
-            </Button>
-          </div>
-        </form>
-      )}
-
-      {payments.length === 0 && !adding && (
-        <p className="text-center text-xs text-[var(--color-muted-foreground)]">
-          No payments recorded
-        </p>
-      )}
-
-      {payments.length > 0 && (
-        <ul className="flex flex-col divide-y divide-[var(--color-border)] rounded-md border border-[var(--color-border)]">
-          {payments.map((p) => (
-            <li key={p.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
-              <div className="flex flex-col">
-                <span className="font-medium tabular-nums">
-                  {p.is_refund ? "-" : ""}
-                  {formatCurrency(Math.abs(p.amount_cents))}
-                </span>
-                {p.notes && (
-                  <span className="text-xs text-[var(--color-muted-foreground)]">{p.notes}</span>
-                )}
-              </div>
-              <div className="flex flex-col items-end">
-                <span className="text-xs text-[var(--color-muted-foreground)]">
-                  {formatDateTime(p.paid_at)}
-                </span>
-                <span className="text-[10px] uppercase tracking-wider text-[var(--color-muted-foreground)]">
-                  {p.source}
-                </span>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+      <ul className="flex flex-col divide-y divide-[var(--color-border)] rounded-md border border-[var(--color-border)]">
+        {payments.map((p) => (
+          <li key={p.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+            <div className="flex flex-col">
+              <span className="font-medium tabular-nums">
+                {p.is_refund ? "-" : ""}
+                {formatCurrency(Math.abs(p.amount_cents))}
+              </span>
+              {p.notes && (
+                <span className="text-xs text-[var(--color-muted-foreground)]">{p.notes}</span>
+              )}
+            </div>
+            <div className="flex flex-col items-end">
+              <span className="text-xs text-[var(--color-muted-foreground)]">
+                {formatDateTime(p.paid_at)}
+              </span>
+              <span className="text-[10px] uppercase tracking-wider text-[var(--color-muted-foreground)]">
+                {p.source}
+              </span>
+            </div>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }

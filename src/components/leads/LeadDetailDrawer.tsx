@@ -2,6 +2,7 @@ import * as React from "react"
 import {
   CalendarX,
   CalendarClock,
+  CheckCircle2,
   Loader2,
   Plus,
   Trash2,
@@ -37,6 +38,7 @@ import type { LeadStage } from "@/lib/database.types"
 import { cn, formatCurrency, formatDateTime } from "@/lib/utils"
 import { TIERS } from "@/lib/tiers"
 import { ContactForm } from "@/components/ContactForm"
+import { LogCloseDialog } from "@/components/leads/LogCloseDialog"
 
 interface LeadDetailDrawerProps {
   leadId: string | null
@@ -63,6 +65,7 @@ function Inner({ leadId, onClose }: { leadId: string; onClose: () => void }) {
   const update = useUpdateLead()
   const remove = useDeleteLead()
   const logOutcome = useLogCallOutcome()
+  const [logCloseOpen, setLogCloseOpen] = React.useState(false)
 
   if (lead.isLoading) {
     return (
@@ -326,14 +329,32 @@ function Inner({ leadId, onClose }: { leadId: string; onClose: () => void }) {
       </SheetBody>
 
       <SheetFooter>
-        <button
-          type="button"
-          onClick={deleteLead}
-          className="inline-flex items-center gap-1.5 text-xs text-[var(--color-destructive)] hover:underline"
-        >
-          <Trash2 className="h-3.5 w-3.5" /> Delete this lead
-        </button>
+        <div className="flex w-full items-center justify-between gap-3">
+          <Button
+            type="button"
+            onClick={() => setLogCloseOpen(true)}
+            disabled={l.stage === "won"}
+          >
+            <CheckCircle2 className="h-4 w-4" />
+            {l.stage === "won" ? "Closed" : "Log close"}
+          </Button>
+          <button
+            type="button"
+            onClick={deleteLead}
+            className="inline-flex items-center gap-1.5 text-xs text-[var(--color-destructive)] hover:underline"
+          >
+            <Trash2 className="h-3.5 w-3.5" /> Delete this lead
+          </button>
+        </div>
       </SheetFooter>
+
+      <LogCloseDialog
+        open={logCloseOpen}
+        onOpenChange={setLogCloseOpen}
+        leadId={l.id}
+        leadName={l.full_name}
+        defaultCloserId={l.closer_id}
+      />
     </>
   )
 }

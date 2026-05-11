@@ -92,6 +92,7 @@ export interface Database {
         id: string
         lead_id: string
         program: string
+        coaching_tier: "fundament" | "groepscoaching" | "one_on_one" | "nick_1_on_1" | null
         amount_cents: number
         currency: string
         payment_plan: Json | null
@@ -101,6 +102,17 @@ export interface Database {
         status: "open" | "won" | "lost" | "refunded"
         lost_reason: string | null
         closed_at: string | null
+        closed_by_id: string | null
+        notes: string | null
+        created_at: string
+      }>
+      deal_installments: Tbl<{
+        id: string
+        deal_id: string
+        seq: number
+        amount_cents: number
+        due_date: string
+        paid_at: string | null
         created_at: string
       }>
       students: Tbl<{

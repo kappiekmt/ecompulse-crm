@@ -47,3 +47,9 @@ verify_jwt = true
 # JWT). Gateway enforces auth.
 [functions.notify-coach-assigned]
 verify_jwt = true
+
+# Deal-closed Slack alert — closer or admin fires it from the Log Close
+# dialog. Gateway enforces JWT; the function uses the admin client to read
+# the deal regardless of the caller's RLS scope.
+[functions.notify-deal-closed]
+verify_jwt = true

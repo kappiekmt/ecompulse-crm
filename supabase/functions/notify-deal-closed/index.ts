@@ -14,6 +14,7 @@ import { serve } from "https://deno.land/std@0.224.0/http/server.ts"
 import { corsHeaders } from "../_shared/cors.ts"
 import { adminClient, getIntegrationConfig, logIntegration } from "../_shared/supabase-admin.ts"
 import { formatLocalTime, leadDeepLink, postToSlack, slackMention } from "../_shared/slack.ts"
+import { postMessage } from "../_shared/slack-bot.ts"
 import { TIERS, tierByKey } from "../_shared/tiers.ts"
 
 function jsonResponse(body: unknown, init: ResponseInit = {}) {
@@ -85,22 +86,26 @@ serve(async (req) => {
     .eq("deal_id", deal.id)
     .order("seq", { ascending: true })
 
+  // Routing: prefer the bot token (it can post to #payments directly via
+  // chat:write.public). Fall back to the incoming-webhook URL stored in
+  // integration_configs.slack if the bot isn't installed.
+  const botToken = Deno.env.get("SLACK_BOT_TOKEN") ?? ""
+  const paymentsChannel = Deno.env.get("SLACK_CHANNEL_PAYMENTS") ?? "#payments"
   const slackConfig = await getIntegrationConfig(supabase, "slack")
   const webhook =
-    slackConfig?.payments_webhook_url ||
-    slackConfig?.bookings_webhook_url
+    slackConfig?.payments_webhook_url || slackConfig?.bookings_webhook_url
 
-  if (!webhook) {
+  if (!botToken && !webhook) {
     await logIntegration(supabase, {
       provider: "slack",
       direction: "outbound",
       event_type: "deal.closed",
       status: "failed",
-      error: "No payments_webhook_url or bookings_webhook_url configured",
+      error: "No SLACK_BOT_TOKEN and no payments_webhook_url / bookings_webhook_url",
       related_lead_id: deal.lead_id,
     })
     return jsonResponse(
-      { error: "Slack payments webhook not configured" },
+      { error: "Slack not configured for #payments" },
       { status: 500 }
     )
   }
@@ -195,16 +200,40 @@ serve(async (req) => {
     ],
   }
 
-  const slackRes = await postToSlack(webhook, message)
+  let ok = false
+  let status: number | null = null
+  let errorMsg: string | null = null
+  let route: "bot" | "webhook" = "bot"
+  let botError: string | null = null
+
+  if (botToken) {
+    const fallbackText = `Deal closed — ${tierLabel(deal.coaching_tier)} · ${fmtEUR(total)} · ${lead.full_name ?? "Unknown lead"}`
+    const r = await postMessage(botToken, {
+      channel: paymentsChannel,
+      text: fallbackText,
+      blocks: message.blocks,
+    })
+    ok = r.ok
+    errorMsg = r.error
+    botError = r.error
+  }
+
+  if (!ok && webhook) {
+    route = "webhook"
+    const r = await postToSlack(webhook, message)
+    ok = r.ok
+    status = r.status
+    errorMsg = r.error
+  }
 
   await logIntegration(supabase, {
     provider: "slack",
     direction: "outbound",
     event_type: "deal.closed",
-    status: slackRes.ok ? "success" : "failed",
-    request_payload: { deal_id: deal.id },
-    response_payload: { status: slackRes.status, body: slackRes.body },
-    error: slackRes.error,
+    status: ok ? "success" : "failed",
+    request_payload: { deal_id: deal.id, route, channel: paymentsChannel },
+    response_payload: { status },
+    error: errorMsg,
     related_lead_id: deal.lead_id,
   })
 
@@ -212,9 +241,5 @@ serve(async (req) => {
   // via tierByKey when the deal's tier is set on a future code path.
   void TIERS
 
-  return jsonResponse({
-    ok: slackRes.ok,
-    status: slackRes.status,
-    error: slackRes.error,
-  })
+  return jsonResponse({ ok, status, route, error: errorMsg, bot_error: botError, channel: paymentsChannel })
 })

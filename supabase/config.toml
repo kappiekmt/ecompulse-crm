@@ -13,6 +13,11 @@ verify_jwt = false
 [functions.stripe-webhook]
 verify_jwt = false
 
+# Fathom call-recording webhook — verifies the X-Fathom-Secret header inside
+# the function so we can leave the gateway open for Fathom's POSTs.
+[functions.fathom-webhook]
+verify_jwt = false
+
 # Slack app receiver — slash commands, Events API, interactivity.
 # Verifies the Slack signing secret inside the function, no JWT needed.
 [functions.slack-app]

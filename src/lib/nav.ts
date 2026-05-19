@@ -13,6 +13,8 @@ import {
   Banknote,
   AlertTriangle,
   Wallet,
+  Headphones,
+  MessageSquareWarning,
   type LucideIcon,
 } from "lucide-react"
 import type { TeamRole } from "@/lib/database.types"
@@ -52,6 +54,8 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { label: "Leads", to: "/leads", icon: Users, roles: ["admin", "closer", "setter"] },
       { label: "Pipeline", to: "/pipeline", icon: GitBranch, roles: ["admin", "closer", "setter"] },
+      { label: "Calls", to: "/calls", icon: Headphones, roles: ["admin", "closer"] },
+      { label: "Objections", to: "/objections", icon: MessageSquareWarning, roles: ["admin", "closer"] },
     ],
   },
   {

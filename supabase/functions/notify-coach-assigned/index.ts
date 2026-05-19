@@ -94,24 +94,101 @@ serve(async (req) => {
     Deno.env.get("CRM_PUBLIC_BASE_URL") ?? "https://coaching.joinecompulse.com"
   const studentUrl = `${baseUrl}/students?student=${student.id}`
 
-  const message = {
-    blocks: [
-      {
-        type: "header",
-        text: {
-          type: "plain_text",
-          text: "EcomPulse CRM — STUDENTS · New Student Assigned",
-          emoji: true,
-        },
+  // Coach handoff packet — pull the most recent recorded call for this lead
+  // so the coach walks into the welcome call with full context.
+  type HandoffCall = {
+    id: string
+    fathom_share_url: string | null
+    summary: string | null
+    outcome_notes: string | null
+    started_at: string | null
+    duration_seconds: number | null
+    action_items: { description: string; assignee: string | null }[] | null
+  }
+  const { data: handoff } = await supabase
+    .from("calls")
+    .select(
+      "id, fathom_share_url, summary, outcome_notes, started_at, duration_seconds, action_items:call_action_items(description, assignee)"
+    )
+    .eq("lead_id", student.lead_id)
+    .order("started_at", { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle<HandoffCall>()
+
+  const blocks: Record<string, unknown>[] = [
+    {
+      type: "header",
+      text: {
+        type: "plain_text",
+        text: "EcomPulse CRM — STUDENTS · New Student Assigned",
+        emoji: true,
       },
+    },
+    {
+      type: "section",
+      fields: [
+        { type: "mrkdwn", text: `*Student:*\n${studentName}` },
+        { type: "mrkdwn", text: `*Program:*\n${student.program}` },
+        { type: "mrkdwn", text: `*Coach:*\n${coachMention}` },
+      ],
+    },
+  ]
+
+  if (handoff) {
+    const snippet = (handoff.summary ?? handoff.outcome_notes ?? "").trim().slice(0, 600)
+    if (snippet) {
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*📞 What the closer learned:*\n>${snippet.replace(/\n/g, "\n>")}`,
+        },
+      })
+    }
+    const actions = (handoff.action_items ?? []).slice(0, 5)
+    if (actions.length > 0) {
+      const bullets = actions
+        .map((a) => `• ${a.description}${a.assignee ? ` _(→ ${a.assignee})_` : ""}`)
+        .join("\n")
+      blocks.push({
+        type: "section",
+        text: { type: "mrkdwn", text: `*Open action items from the close call:*\n${bullets}` },
+      })
+    }
+
+    const handoffActions: Record<string, unknown>[] = [
+      {
+        type: "button",
+        style: "primary",
+        text: { type: "plain_text", text: "👉 See in CRM", emoji: true },
+        url: studentUrl,
+      },
+    ]
+    if (handoff.fathom_share_url) {
+      handoffActions.push({
+        type: "button",
+        text: { type: "plain_text", text: "🎥 Watch closing call", emoji: true },
+        url: handoff.fathom_share_url,
+      })
+    }
+    handoffActions.push({
+      type: "button",
+      text: { type: "plain_text", text: "📋 Open call notes", emoji: true },
+      url: `${baseUrl}/calls?call=${handoff.id}`,
+    })
+
+    blocks.push(
       {
         type: "section",
-        fields: [
-          { type: "mrkdwn", text: `*Student:*\n${studentName}` },
-          { type: "mrkdwn", text: `*Program:*\n${student.program}` },
-          { type: "mrkdwn", text: `*Coach:*\n${coachMention}` },
-        ],
+        text: {
+          type: "mrkdwn",
+          text: `${coachMention} — start your Welcome Call SOP now. The closing call is linked below.`,
+        },
       },
+      { type: "actions", elements: handoffActions }
+    )
+  } else {
+    blocks.push(
       {
         type: "section",
         text: {
@@ -129,9 +206,11 @@ serve(async (req) => {
             url: studentUrl,
           },
         ],
-      },
-    ],
+      }
+    )
   }
+
+  const message = { blocks }
 
   const result = await postToSlack(webhookUrl, message)
 

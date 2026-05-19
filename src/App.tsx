@@ -7,6 +7,8 @@ import { Dashboard } from "@/pages/Dashboard"
 import { CommandCenter } from "@/pages/CommandCenter"
 import { Pipeline } from "@/pages/Pipeline"
 import { Leads } from "@/pages/Leads"
+import { Calls } from "@/pages/Calls"
+import { Objections } from "@/pages/Objections"
 import { Students } from "@/pages/Students"
 import { Finance } from "@/pages/Finance"
 import { Recovery } from "@/pages/Recovery"
@@ -57,6 +59,8 @@ function App() {
               <Route path="command-center" element={<CommandCenter />} />
               <Route path="leads" element={<Leads />} />
               <Route path="pipeline" element={<Pipeline />} />
+              <Route path="calls" element={<Calls />} />
+              <Route path="objections" element={<Objections />} />
               <Route path="students" element={<Students />} />
               <Route path="finance" element={<Finance />} />
               <Route path="finance/recovery" element={<Recovery />} />

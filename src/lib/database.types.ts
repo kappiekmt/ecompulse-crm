@@ -27,6 +27,34 @@ export type TeamRole = "admin" | "closer" | "setter" | "coach"
 
 export type ApiKeyScope = "lead.create" | "payment.create" | "read.basic"
 
+export type CallOutcome =
+  | "pending"
+  | "closed_won"
+  | "follow_up"
+  | "no_show"
+  | "not_qualified"
+  | "pitched"
+  | "lost"
+
+export type ObjectionCategory =
+  | "price"
+  | "timing"
+  | "authority"
+  | "trust"
+  | "need"
+  | "spouse"
+  | "other"
+
+export type CallSource = "fathom" | "manual"
+
+export interface CallAiReview {
+  framework_score?: number
+  strengths?: string[]
+  improvements?: string[]
+  needs_review?: boolean
+  summary?: string
+}
+
 type Tbl<Row, Insert = Partial<Row>, Update = Partial<Row>> = {
   Row: Row
   Insert: Insert
@@ -401,6 +429,59 @@ export interface Database {
         created_at: string
         updated_at: string
       }>
+      calls: Tbl<{
+        id: string
+        lead_id: string | null
+        closer_id: string | null
+        deal_id: string | null
+        source: CallSource
+        fathom_id: string | null
+        fathom_share_url: string | null
+        recording_url: string | null
+        transcript_url: string | null
+        title: string | null
+        started_at: string | null
+        ended_at: string | null
+        duration_seconds: number | null
+        host_email: string | null
+        attendee_emails: string[] | null
+        summary: string | null
+        transcript: string | null
+        outcome: CallOutcome
+        outcome_notes: string | null
+        outcome_tagged_by: string | null
+        outcome_tagged_at: string | null
+        ai_review: CallAiReview | null
+        ai_reviewed_at: string | null
+        created_at: string
+        updated_at: string
+      }>
+      call_action_items: Tbl<{
+        id: string
+        call_id: string
+        description: string
+        assignee: string | null
+        due_date: string | null
+        completed: boolean
+        completed_at: string | null
+        source: CallSource
+        created_at: string
+      }>
+      objections: Tbl<{
+        id: string
+        label: string
+        description: string | null
+        category: ObjectionCategory
+        created_at: string
+      }>
+      call_objections: Tbl<{
+        id: string
+        call_id: string
+        objection_id: string
+        quote: string | null
+        source: CallSource
+        created_at: string
+      }>
       api_keys: Tbl<
         {
           id: string
@@ -489,6 +570,29 @@ export interface Database {
         bookings_made: number
         bookings_to_sale: number
         conversion_rate_pct: number
+      }>
+      closer_call_stats_v: Vw<{
+        closer_id: string
+        full_name: string
+        calls_total: number
+        calls_30d: number
+        calls_7d: number
+        closes: number
+        untagged_outcomes: number
+        tagged_outcomes: number
+        needs_review: number
+        avg_duration_seconds: number
+        close_rate_pct: number
+        avg_framework_score: number
+      }>
+      objection_rollup: Vw<{
+        closer_id: string | null
+        objection_id: string
+        label: string
+        category: ObjectionCategory
+        week_start: string
+        occurrences: number
+        example_call_ids: string[]
       }>
       lead_funnel_v: Vw<{
         lead_id: string

@@ -11,6 +11,7 @@ import {
   OutstandingDealsTable,
   RecentCommissionsAndLedger,
 } from "@/components/dashboard/CommissionSections"
+import { CallStatsCard } from "@/components/calls/CallStatsCard"
 import { useAuth } from "@/lib/auth"
 import { cn, formatCurrency } from "@/lib/utils"
 import {
@@ -190,6 +191,13 @@ export function CloserDashboard() {
             value={formatCurrency(stats.data?.aov_cents ?? 0)}
           />
         </div>
+
+        {/* Your call performance — pulled from Fathom recordings + AI review */}
+        <CallStatsCard
+          closerId={profile?.id ?? null}
+          heading="Your calls"
+          description="All recorded calls, close rate on tagged outcomes, and any AI-flagged calls waiting on you."
+        />
 
         {/* Recent commissions + ledger */}
         <RecentCommissionsAndLedger onOpenLead={setActiveId} />

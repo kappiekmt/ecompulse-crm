@@ -23,7 +23,17 @@ import {
   slackMention,
 } from "../_shared/slack.ts"
 
-type TestId = "call_booked" | "call_cancelled" | "pre_call" | "eod" | "subscriptions"
+type TestId =
+  | "call_booked"
+  | "call_cancelled"
+  | "pre_call"
+  | "eod"
+  | "eow"
+  | "deal_closed"
+  | "commission"
+  | "onboarding"
+  | "recovery"
+  | "subscriptions"
 
 interface TestResult {
   id: TestId | string
@@ -302,6 +312,162 @@ async function testEod(authHeader: string): Promise<TestResult> {
   }
 }
 
+// ─── EOW report (delegates to /eow-report) ──────────────────────────────────
+
+async function testEow(authHeader: string): Promise<TestResult> {
+  const url = Deno.env.get("SUPABASE_URL")
+  if (!url) return { id: "eow", label: "EOW report", ok: false, error: "SUPABASE_URL missing" }
+  try {
+    const res = await fetch(`${url}/functions/v1/eow-report`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: authHeader },
+      body: "{}",
+    })
+    const txt = (await res.text()).slice(0, 200)
+    return {
+      id: "eow",
+      label: "EOW report",
+      ok: res.ok,
+      status: res.status,
+      detail: txt,
+      error: res.ok ? null : `eow-report returned ${res.status}`,
+    }
+  } catch (err) {
+    return { id: "eow", label: "EOW report", ok: false, error: (err as Error).message }
+  }
+}
+
+// ─── deal closed / payment (posts a TEST card to #payments) ──────────────────
+
+async function testDealClosed(
+  supabase: ReturnType<typeof adminClient>
+): Promise<TestResult> {
+  const slackConfig = await getIntegrationConfig(supabase, "slack")
+  const webhook = slackConfig?.payments_webhook_url
+  if (!webhook) {
+    return {
+      id: "deal_closed",
+      label: "Slack — deal closed / payment",
+      ok: false,
+      error: "No payments_webhook_url configured in Slack integration",
+    }
+  }
+  const closer = await pickSampleCloser(supabase)
+  const closerLine = closer
+    ? slackMention(closer.slack_user_id) ?? `*${closer.full_name}*`
+    : "_Unassigned_"
+  const message = {
+    blocks: [
+      {
+        type: "header",
+        text: { type: "plain_text", text: "🧪 TEST · 💰 Deal closed", emoji: true },
+      },
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: `*${SAMPLE_LEAD.full_name}* closed — *€997* collected.` },
+      },
+      {
+        type: "section",
+        fields: [
+          { type: "mrkdwn", text: `*Closer:*\n${closerLine}` },
+          { type: "mrkdwn", text: `*Program:*\nEcomPulse Coaching` },
+        ],
+      },
+      {
+        type: "context",
+        elements: [
+          { type: "mrkdwn", text: "_Test fire from the CRM — no real deal or payment created._" },
+        ],
+      },
+    ],
+  }
+  const r = await postToSlack(webhook, message)
+  return {
+    id: "deal_closed",
+    label: "Slack — deal closed / payment",
+    ok: r.ok,
+    status: r.status,
+    detail: "→ payments channel",
+    error: r.error,
+  }
+}
+
+// ─── Readiness checks (NOT fired — these have real external side effects) ────
+// commission DMs a real closer, onboarding creates a real Discord invite, and
+// recovery flips installments to `failed` + dunns real customers. We verify
+// each is wired/configured instead of triggering it.
+
+async function testCommissionReadiness(
+  supabase: ReturnType<typeof adminClient>
+): Promise<TestResult> {
+  const issues: string[] = []
+  if (!Deno.env.get("SLACK_BOT_TOKEN")) issues.push("SLACK_BOT_TOKEN secret not set")
+  const { data: toggle } = await supabase
+    .from("automation_settings")
+    .select("enabled")
+    .eq("key", "commission_tracking_enabled")
+    .maybeSingle()
+  if (!toggle) issues.push("commission_tracking_enabled toggle missing")
+  else if (toggle.enabled === false) issues.push("commission_tracking_enabled is off")
+  const { data: dmTargets } = await supabase
+    .from("team_members")
+    .select("id")
+    .in("role", ["closer", "admin"])
+    .eq("is_active", true)
+    .not("slack_user_id", "is", null)
+    .limit(1)
+  if (!dmTargets?.length) issues.push("no active closer has a slack_user_id (no DM target)")
+  const ok = issues.length === 0
+  return {
+    id: "commission",
+    label: "Commission DM (readiness — not fired)",
+    ok,
+    detail: ok ? "ready: bot token + toggle + DM target all present" : undefined,
+    error: ok ? null : issues.join("; "),
+  }
+}
+
+async function testOnboardingReadiness(
+  supabase: ReturnType<typeof adminClient>
+): Promise<TestResult> {
+  const issues: string[] = []
+  const cfg = await getIntegrationConfig(supabase, "discord")
+  if (!cfg?.bot_token) issues.push("discord bot_token not set")
+  if (!cfg?.welcome_channel_id) issues.push("discord welcome_channel_id not set")
+  const ok = issues.length === 0
+  return {
+    id: "onboarding",
+    label: "Onboarding chain (readiness — not fired)",
+    ok,
+    detail: ok ? "ready: Discord invite configured" : undefined,
+    error: ok ? null : issues.join("; "),
+  }
+}
+
+async function testRecoveryReadiness(
+  supabase: ReturnType<typeof adminClient>
+): Promise<TestResult> {
+  const issues: string[] = []
+  if (!Deno.env.get("SLACK_BOT_TOKEN")) issues.push("SLACK_BOT_TOKEN secret not set")
+  const { data: toggle } = await supabase
+    .from("automation_settings")
+    .select("enabled")
+    .eq("key", "recovery_enabled")
+    .maybeSingle()
+  if (!toggle) issues.push("recovery_enabled toggle missing")
+  else if (toggle.enabled === false) issues.push("recovery_enabled is off")
+  const ok = issues.length === 0
+  return {
+    id: "recovery",
+    label: "Payment recovery (readiness — not fired)",
+    ok,
+    detail: ok
+      ? "ready: toggle on + bot token present (note: verify the daily cron is registered)"
+      : undefined,
+    error: ok ? null : issues.join("; "),
+  }
+}
+
 // ─── Outbound webhook subscriptions ─────────────────────────────────────────
 
 async function testSubscriptions(
@@ -371,7 +537,18 @@ serve(async (req) => {
     /* body optional */
   }
   const wanted = new Set<TestId>(
-    body.tests ?? ["call_booked", "call_cancelled", "pre_call", "eod", "subscriptions"]
+    body.tests ?? [
+      "call_booked",
+      "call_cancelled",
+      "pre_call",
+      "eod",
+      "eow",
+      "deal_closed",
+      "commission",
+      "onboarding",
+      "recovery",
+      "subscriptions",
+    ]
   )
 
   const supabase = adminClient()
@@ -382,6 +559,11 @@ serve(async (req) => {
   if (wanted.has("call_cancelled")) tasks.push(testCallCancelled(supabase))
   if (wanted.has("pre_call")) tasks.push(testPreCall(supabase))
   if (wanted.has("eod")) tasks.push(testEod(authHeader))
+  if (wanted.has("eow")) tasks.push(testEow(authHeader))
+  if (wanted.has("deal_closed")) tasks.push(testDealClosed(supabase))
+  if (wanted.has("commission")) tasks.push(testCommissionReadiness(supabase))
+  if (wanted.has("onboarding")) tasks.push(testOnboardingReadiness(supabase))
+  if (wanted.has("recovery")) tasks.push(testRecoveryReadiness(supabase))
   if (wanted.has("subscriptions")) tasks.push(testSubscriptions(supabase, authHeader))
 
   const settled = await Promise.all(tasks)

@@ -1,53 +1,59 @@
 # Scheduling the EOW Slack report (Sundays 22:00 Amsterdam, DST-aware)
 
-The end-of-week summary posts to the **same #eod webhook** as the daily report, one hour after Sunday's final EOD (which fires at 21:00). Same DST problem as the EOD: `Europe/Amsterdam` is **CEST** (UTC+2) in summer and **CET** (UTC+1) in winter, and `pg_cron` can't change `cron.timezone` without a server restart (not available on Supabase). So we register **two cron jobs** — one per offset — and let the edge function gate on the actual local day + hour. Net effect: exactly one send each Sunday night, DST handled automatically.
+> **Status: already registered** (May 2026) — `eow-report-amsterdam-cest` and
+> `eow-report-amsterdam-cet` exist in `cron.job` and are `active`. This doc is
+> the reference for how they were created / how to recreate them.
 
-`pg_cron` and `pg_net` are already enabled by migration `0010_eod_schedule.sql`; nothing extra to enable here. The two cron jobs below are registered separately (one-time, with a `service_role` JWT injected at runtime) so the JWT never lands in this public repo.
+The end-of-week summary posts to the **same #eod webhook** as the daily report, one hour after Sunday's final EOD (which fires at 21:00). Same DST problem as the EOD: `Europe/Amsterdam` is **CEST** (UTC+2) in summer and **CET** (UTC+1) in winter, and `pg_cron` can't change `cron.timezone` without a server restart (not available on Supabase). We solve it the same way every other job in this project does — **two cron rows split by month-range**: a CEST row that only fires April–October and a CET row that only fires November–March. Exactly one is ever in season, so only one fires each Sunday. (The function *also* self-gates on the local day+hour as a belt-and-suspenders check.)
+
+`pg_cron` and `pg_net` are already enabled by migration `0010_eod_schedule.sql`; nothing extra to enable here.
 
 ## Register the schedule
 
-In **Supabase Dashboard → SQL Editor**, replace `<YOUR_SERVICE_ROLE_KEY>` with the value from **Settings → API → `service_role`**, then run:
+These were registered via `supabase db query --linked`, reading the `service_role` token straight out of the existing EOD job so it never gets typed or committed:
 
 ```sql
--- Drop any prior schedule under these names (no-ops if absent)
-do $o$ begin perform cron.unschedule('eow-report-amsterdam-cest'); exception when others then null; end $o$;
-do $o$ begin perform cron.unschedule('eow-report-amsterdam-cet');  exception when others then null; end $o$;
+do $do$
+declare
+  v_tok text;
+  v_url text := 'https://ecdqlgigczmiilvztsno.supabase.co/functions/v1/eow-report';
+begin
+  select (regexp_match(command, 'Bearer ([A-Za-z0-9._-]+)'))[1] into v_tok
+    from cron.job where jobname = 'eod-report-amsterdam-cest' limit 1;
 
--- 22:00 Amsterdam during CEST (Apr–Oct, UTC+2) = 20:00 UTC, Sundays (dow 0)
-select cron.schedule('eow-report-amsterdam-cest', '0 20 * * 0', $cron$
-  select net.http_post(
-    url := 'https://ecdqlgigczmiilvztsno.supabase.co/functions/v1/eow-report',
-    headers := jsonb_build_object(
-      'Content-Type', 'application/json',
-      'Authorization', 'Bearer <YOUR_SERVICE_ROLE_KEY>'
-    ),
-    body := '{}'::jsonb
-  ) as request_id;
-$cron$);
+  if exists (select 1 from cron.job where jobname = 'eow-report-amsterdam-cest') then
+    perform cron.unschedule('eow-report-amsterdam-cest');
+  end if;
+  if exists (select 1 from cron.job where jobname = 'eow-report-amsterdam-cet') then
+    perform cron.unschedule('eow-report-amsterdam-cet');
+  end if;
 
--- 22:00 Amsterdam during CET (Nov–Mar, UTC+1) = 21:00 UTC, Sundays (dow 0)
-select cron.schedule('eow-report-amsterdam-cet', '0 21 * * 0', $cron$
-  select net.http_post(
-    url := 'https://ecdqlgigczmiilvztsno.supabase.co/functions/v1/eow-report',
-    headers := jsonb_build_object(
-      'Content-Type', 'application/json',
-      'Authorization', 'Bearer <YOUR_SERVICE_ROLE_KEY>'
-    ),
-    body := '{}'::jsonb
-  ) as request_id;
-$cron$);
+  -- 22:00 Amsterdam, Sundays. CEST (Apr–Oct) = 20:00 UTC; CET (Nov–Mar) = 21:00 UTC.
+  perform cron.schedule('eow-report-amsterdam-cest', '0 20 * 4-10 0', format($cmd$
+  select net.http_post(url := %L,
+    headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || %L),
+    body := '{}'::jsonb) as request_id;
+$cmd$, v_url, v_tok));
+
+  perform cron.schedule('eow-report-amsterdam-cet', '0 21 * 1-3,11,12 0', format($cmd$
+  select net.http_post(url := %L,
+    headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || %L),
+    body := '{}'::jsonb) as request_id;
+$cmd$, v_url, v_tok));
+end
+$do$;
 ```
 
-The function checks the current Amsterdam day + hour: unless it's **Sunday 22:00** the call returns `{ ok: false, skipped: "..." }` and Slack is never hit. So during CEST only the 20:00 UTC firing actually sends; during CET only the 21:00 UTC firing does.
+If you ever rotate the `service_role` key, re-run this block — it re-reads the (new) token from the EOD job, so update the EOD job first (or swap the source).
 
-> Note on `dow`: with `cron.timezone` at its UTC default, `0 21 * * 0` triggers Sunday **21:00 UTC**, which is still Sunday in Amsterdam — so the dow stays correct across the offset. The CEST row at `0 20 * * 0` is likewise Sunday in both zones. No Saturday/Monday spill.
+The function also checks the Amsterdam day + hour: unless it's **Sunday 22:00** it returns `{ ok: false, skipped: "..." }` and Slack is never hit — verified at registration time (a Friday test returned exactly that).
 
 ## Verifying
 
 ```sql
 select jobname, schedule, active from cron.job where jobname like 'eow-%' order by jobname;
--- → eow-report-amsterdam-cest | 0 20 * * 0 | t
--- → eow-report-amsterdam-cet  | 0 21 * * 0 | t
+-- → eow-report-amsterdam-cest | 0 20 * 4-10 0      | t
+-- → eow-report-amsterdam-cet  | 0 21 * 1-3,11,12 0 | t
 
 -- Last 5 outbound EOW events (cron + manual button):
 select event_type, status, response_payload, created_at

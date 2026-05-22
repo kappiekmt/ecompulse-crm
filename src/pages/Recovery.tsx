@@ -83,6 +83,22 @@ export function Recovery() {
   const [showWriteOff, setShowWriteOff] = React.useState(false)
   const [actionError, setActionError] = React.useState<string | null>(null)
 
+  // NOTE: every hook must run on every render. `profile` is null while auth
+  // loads (isAdmin=false) then resolves to admin, so the permission early
+  // return must come AFTER all hooks — including this memo — otherwise React
+  // throws "rendered more hooks than during the previous render" and the page
+  // crashes for admins.
+  const rows = queue.data ?? []
+
+  const closers = React.useMemo(() => {
+    const map = new Map<string, string>()
+    for (const r of rows) {
+      const c = r.deal?.closer
+      if (c) map.set(c.id, c.full_name)
+    }
+    return [...map.entries()].map(([id, name]) => ({ id, name }))
+  }, [rows])
+
   if (!isAdmin) {
     return (
       <div className="flex flex-col">
@@ -100,17 +116,6 @@ export function Recovery() {
       </div>
     )
   }
-
-  const rows = queue.data ?? []
-
-  const closers = React.useMemo(() => {
-    const map = new Map<string, string>()
-    for (const r of rows) {
-      const c = r.deal?.closer
-      if (c) map.set(c.id, c.full_name)
-    }
-    return [...map.entries()].map(([id, name]) => ({ id, name }))
-  }, [rows])
 
   const filtered = rows.filter((r) => {
     if (statusFilter !== "all" && r.status !== statusFilter) return false

@@ -74,3 +74,22 @@ The function checks `automation_settings.weekly_report.enabled`. Toggle it off i
 ## Manual trigger from the Dashboard
 
 The "Send Weekly" button on the Manager Dashboard calls the function with the admin's JWT. The function bypasses the day/time gate AND the toggle for manual calls — so you always see the message in Slack, regardless of when you click. Mid-week, it reports the **current week-to-date** (Monday 00:00 → now); to backfill a completed week, POST `{ "week_start": "YYYY-MM-DD" }` with a Monday.
+
+## Forcing a send from SQL (server-side test)
+
+To verify the report end-to-end without the dashboard, POST `{ "force": true }` with the `service_role` token — it bypasses the Sunday/22:00/toggle gate but still requires valid auth. The cron never sets `force`. Used to verify the schedule at registration time:
+
+```sql
+do $do$
+declare v_tok text;
+begin
+  select (regexp_match(command,'Bearer ([A-Za-z0-9._-]+)'))[1] into v_tok
+    from cron.job where jobname='eod-report-amsterdam-cest' limit 1;
+  perform net.http_post(
+    url := 'https://ecdqlgigczmiilvztsno.supabase.co/functions/v1/eow-report',
+    headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer '||v_tok),
+    body := '{"force":true}'::jsonb);
+end $do$;
+-- then check: select status, response_payload->>'status', error from integrations_log
+--             where event_type='eow_report' order by created_at desc limit 1;
+```

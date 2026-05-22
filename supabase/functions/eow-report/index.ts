@@ -210,7 +210,7 @@ serve(async (req) => {
   if (auth instanceof Response) return auth
   const supabase = adminClient()
 
-  let body: { week_start?: string } = {}
+  let body: { week_start?: string; force?: boolean } = {}
   try {
     if (req.headers.get("content-length") && req.headers.get("content-length") !== "0") {
       body = await req.json()
@@ -222,7 +222,9 @@ serve(async (req) => {
   const ams = amsterdamNowParts()
 
   // CRON path: only fire Sunday 22:00 Amsterdam, and only if the toggle is on.
-  if (auth.source === "service_role") {
+  // `force: true` bypasses the day/hour/toggle gate for an authenticated
+  // admin-initiated test send (the cron never sets it).
+  if (auth.source === "service_role" && body.force !== true) {
     if (ams.weekday !== "Sunday") {
       return jsonResponse({ ok: false, skipped: `not Sunday (got ${ams.weekday})` })
     }

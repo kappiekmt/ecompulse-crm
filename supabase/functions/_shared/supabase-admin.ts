@@ -50,3 +50,20 @@ export async function getIntegrationConfig(
   if (error || !data) return null
   return (data.config as Record<string, string>) ?? null
 }
+
+/**
+ * Whether an automation toggle is enabled. Defaults to `true` when the row is
+ * missing (fail-open) so a forgotten seed never silently disables a feature —
+ * mirrors the inline check used in calendly-webhook.
+ */
+export async function isAutomationEnabled(
+  client: SupabaseClient,
+  key: string
+): Promise<boolean> {
+  const { data } = await client
+    .from("automation_settings")
+    .select("enabled")
+    .eq("key", key)
+    .maybeSingle()
+  return data?.enabled !== false
+}

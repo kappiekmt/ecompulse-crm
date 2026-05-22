@@ -12,7 +12,7 @@
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts"
 import { corsHeaders } from "../_shared/cors.ts"
-import { adminClient, getIntegrationConfig, logIntegration } from "../_shared/supabase-admin.ts"
+import { adminClient, getIntegrationConfig, isAutomationEnabled, logIntegration } from "../_shared/supabase-admin.ts"
 import { formatLocalTime, leadDeepLink, postToSlack, slackMention } from "../_shared/slack.ts"
 import { postMessage } from "../_shared/slack-bot.ts"
 import { TIERS, tierByKey } from "../_shared/tiers.ts"
@@ -62,6 +62,11 @@ serve(async (req) => {
   if (!body.deal_id) return jsonResponse({ error: "Missing deal_id" }, { status: 400 })
 
   const supabase = adminClient()
+
+  // Honour the "Payment received / deal closed" automation toggle.
+  if (!(await isAutomationEnabled(supabase, "payment_received"))) {
+    return jsonResponse({ ok: false, skipped: "payment_received automation disabled" })
+  }
 
   const { data: deal, error: dealErr } = await supabase
     .from("deals")

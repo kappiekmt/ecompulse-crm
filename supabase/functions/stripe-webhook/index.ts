@@ -10,7 +10,7 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts"
 import Stripe from "https://esm.sh/stripe@14?target=deno"
 import { corsHeaders } from "../_shared/cors.ts"
-import { adminClient, getIntegrationConfig, logIntegration } from "../_shared/supabase-admin.ts"
+import { adminClient, getIntegrationConfig, isAutomationEnabled, logIntegration } from "../_shared/supabase-admin.ts"
 import { dispatchEvent } from "../_shared/dispatch.ts"
 import { resolveCoachingTier } from "../_shared/coaching-tier.ts"
 import { tierByAmountCents, tierByKey } from "../_shared/tiers.ts"
@@ -157,15 +157,18 @@ serve(async (req) => {
 
           // Auto-create a student row so onboarding can begin. Coach is
           // round-robin assigned to the least-loaded active coach (or admin
-          // acting as coach) so the new student isn't stuck waiting.
+          // acting as coach) so the new student isn't stuck waiting. The
+          // student row is always created (data integrity); the coach
+          // AUTO-assignment is the automation gated by `onboarding_chain`.
           if (deal?.id) {
+            const onboardingOn = await isAutomationEnabled(supabase, "onboarding_chain")
             const { data: existing } = await supabase
               .from("students")
               .select("id, coach_id")
               .eq("deal_id", deal.id)
               .maybeSingle()
             if (!existing) {
-              const coachId = await pickLeastLoadedCoach(supabase)
+              const coachId = onboardingOn ? await pickLeastLoadedCoach(supabase) : null
               const { data: newStudent } = await supabase
                 .from("students")
                 .insert({
@@ -189,8 +192,8 @@ serve(async (req) => {
                   } as never,
                 })
               }
-            } else if (!existing.coach_id) {
-              // Existing student row but no coach — backfill.
+            } else if (!existing.coach_id && onboardingOn) {
+              // Existing student row but no coach — backfill (when enabled).
               const coachId = await pickLeastLoadedCoach(supabase)
               if (coachId) {
                 await supabase

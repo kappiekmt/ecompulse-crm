@@ -1,5 +1,5 @@
 import * as React from "react"
-import { FileBarChart, Loader2, Send } from "lucide-react"
+import { CalendarDays, Loader2, Send } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { StatCard } from "@/components/StatCard"
 import { supabase } from "@/lib/supabase"
@@ -31,15 +31,21 @@ export function AdminDashboard() {
 
   const [eodSending, setEodSending] = React.useState(false)
   const [eodMsg, setEodMsg] = React.useState<{ ok: boolean; text: string } | null>(null)
+  const [eowSending, setEowSending] = React.useState(false)
+  const [eowMsg, setEowMsg] = React.useState<{ ok: boolean; text: string } | null>(null)
 
-  async function sendEod() {
-    setEodSending(true)
-    setEodMsg(null)
+  // Fire an EOD / EOW report to the #eod Slack channel. Both edge functions
+  // share the auth + response shape; `kind` picks the path and state setters.
+  async function sendReport(kind: "eod" | "eow") {
+    const setSending = kind === "eod" ? setEodSending : setEowSending
+    const setMsg = kind === "eod" ? setEodMsg : setEowMsg
+    setSending(true)
+    setMsg(null)
     try {
       const { data: sess } = await supabase.auth.getSession()
       const jwt = sess.session?.access_token
       const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/eod-report`,
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/${kind}-report`,
         {
           method: "POST",
           headers: {
@@ -51,18 +57,16 @@ export function AdminDashboard() {
       )
       const json = await res.json()
       if (json.ok) {
-        setEodMsg({ ok: true, text: `✓ Sent to Slack (${json.date})` })
+        const when = kind === "eod" ? json.date : `${json.week_start}→${json.week_end}`
+        setMsg({ ok: true, text: `✓ Sent to Slack (${when})` })
       } else {
-        setEodMsg({
-          ok: false,
-          text: `✗ ${json.error ?? "Failed"}`,
-        })
+        setMsg({ ok: false, text: `✗ ${json.error ?? "Failed"}` })
       }
     } catch (err) {
-      setEodMsg({ ok: false, text: `✗ ${(err as Error).message}` })
+      setMsg({ ok: false, text: `✗ ${(err as Error).message}` })
     } finally {
-      setEodSending(false)
-      setTimeout(() => setEodMsg(null), 6000)
+      setSending(false)
+      setTimeout(() => setMsg(null), 6000)
     }
   }
 
@@ -124,19 +128,19 @@ export function AdminDashboard() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {eodMsg && (
+          {(eodMsg ?? eowMsg) && (
             <span
               className={cn(
                 "text-xs font-medium",
-                eodMsg.ok
+                (eodMsg ?? eowMsg)!.ok
                   ? "text-[var(--color-success)]"
                   : "text-[var(--color-destructive)]"
               )}
             >
-              {eodMsg.text}
+              {(eodMsg ?? eowMsg)!.text}
             </span>
           )}
-          <Button onClick={sendEod} disabled={eodSending}>
+          <Button onClick={() => sendReport("eod")} disabled={eodSending}>
             {eodSending ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
@@ -144,8 +148,13 @@ export function AdminDashboard() {
             )}
             Send Team EOD
           </Button>
-          <Button variant="outline">
-            <FileBarChart className="h-4 w-4" /> Full Report
+          <Button variant="outline" onClick={() => sendReport("eow")} disabled={eowSending}>
+            {eowSending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <CalendarDays className="h-4 w-4" />
+            )}
+            Send Weekly
           </Button>
         </div>
       </header>

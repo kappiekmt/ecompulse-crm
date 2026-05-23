@@ -29,12 +29,21 @@ export interface DealCommissionSummary {
   closer_id: string
   contract_amount_cents: number
   cash_collected_cents: number
+  /** Closer's earned commission on cash collected so far. */
   commission_earned_cents: number
   outstanding_cents: number
+  /** Closer's commission % at time of query. */
   current_rate: number
+  /** Closer's projected commission on the remaining unpaid installments. */
   projected_remaining_commission_cents: number
   payments_received_count: number
   installments_planned: number
+  // Setter side (added in migration 0027). 0 when no active setter is on
+  // the lead OR their commission_pct is null/0.
+  setter_id: string | null
+  setter_commission_earned_cents: number
+  setter_rate: number
+  projected_remaining_setter_commission_cents: number
   lead?: { full_name: string; email: string | null } | null
   next_installment_due_date?: string | null
   next_installment_amount_cents?: number | null

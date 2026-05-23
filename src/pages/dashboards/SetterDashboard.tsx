@@ -5,6 +5,10 @@ import { Card, CardContent } from "@/components/ui/card"
 import { StatCard } from "@/components/StatCard"
 import { LeadDetailDrawer } from "@/components/leads/LeadDetailDrawer"
 import { StageBadge } from "@/components/leads/StageBadge"
+import {
+  CommissionKpiCards,
+  OutstandingDealsTable,
+} from "@/components/dashboard/CommissionSections"
 import { useAuth } from "@/lib/auth"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { cn, formatDateTime } from "@/lib/utils"
@@ -95,6 +99,13 @@ export function SetterDashboard() {
             value={`${stats.data?.conversion_rate_pct ?? 0}%`}
           />
         </div>
+
+        {/* Commission earned + projected — same components as CloserDashboard,
+            passing role="setter" so OutstandingDealsTable shows the setter's
+            commission columns instead of the closer's. The KPI cards already
+            return the user's own rows via RLS regardless of role. */}
+        <CommissionKpiCards leadsToday={stats.data?.bookings ?? 0} />
+        <OutstandingDealsTable onOpenLead={setActiveId} role="setter" />
 
         <Card>
           <CardContent className="flex flex-col gap-4 p-6">

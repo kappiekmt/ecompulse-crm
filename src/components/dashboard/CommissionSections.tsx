@@ -136,8 +136,11 @@ export function CommissionKpiCards({
 
 export function OutstandingDealsTable({
   onOpenLead,
+  role = "closer",
 }: {
   onOpenLead: (leadId: string) => void
+  /** Which side's earned + projected to display. Defaults to "closer". */
+  role?: "closer" | "setter"
 }) {
   const deals = useOutstandingDeals()
   const data = deals.data ?? []
@@ -214,10 +217,18 @@ export function OutstandingDealsTable({
                         {formatCurrency(row.outstanding_cents)}
                       </td>
                       <td className="py-2 pr-3 text-right tabular-nums text-[var(--color-success)]">
-                        +{formatCurrency(row.commission_earned_cents)}
+                        +{formatCurrency(
+                          role === "setter"
+                            ? row.setter_commission_earned_cents
+                            : row.commission_earned_cents
+                        )}
                       </td>
                       <td className="py-2 pr-3 text-right tabular-nums text-[var(--color-muted-foreground)]">
-                        +{formatCurrency(row.projected_remaining_commission_cents)}
+                        +{formatCurrency(
+                          role === "setter"
+                            ? row.projected_remaining_setter_commission_cents
+                            : row.projected_remaining_commission_cents
+                        )}
                       </td>
                       <td className="py-2 text-xs">
                         {row.next_installment_due_date ? (

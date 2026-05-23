@@ -84,10 +84,6 @@ export function AdminDashboard() {
     () => bucketMetrics(daily.data ?? [], "month", "cash_collected_cents", 12),
     [daily.data]
   )
-  const weeklyOrder = React.useMemo(
-    () => bucketMetrics(daily.data ?? [], "week", "order_value_cents", 12),
-    [daily.data]
-  )
   const weeklyCash = React.useMemo(
     () => bucketMetrics(daily.data ?? [], "week", "cash_collected_cents", 12),
     [daily.data]

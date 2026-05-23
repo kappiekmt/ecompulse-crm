@@ -54,12 +54,16 @@ function timeAgo(iso?: string | null): string {
 
 const HEALTH_PRESENTATION: Record<
   HealthLevel,
-  { icon: React.ComponentType<{ className?: string }>; label: string; badge: "success" | "warning" | "destructive" | "muted" | "secondary"; cls: string }
+  { icon: React.ComponentType<{ className?: string }>; label: string; badge: "success" | "warning" | "destructive" | "muted" | "secondary"; cls: string; hint?: string }
 > = {
   healthy: { icon: CheckCircle2, label: "Healthy", badge: "success", cls: "text-[var(--color-success)]" },
   warning: { icon: AlertTriangle, label: "Warning", badge: "warning", cls: "text-[var(--color-warning)]" },
   failed: { icon: XCircle, label: "Failed", badge: "destructive", cls: "text-[var(--color-destructive)]" },
-  idle: { icon: CircleDashed, label: "Idle", badge: "muted", cls: "text-[var(--color-muted-foreground)]" },
+  // "idle" = automation is wired correctly but no real event has flowed through
+  // yet. Webhook receivers and event-driven automations start here; they flip
+  // to Healthy the moment a real event lands. The Test button fires a labelled
+  // smoke card directly to Slack — it doesn't change this status, by design.
+  idle: { icon: CircleDashed, label: "Awaiting", badge: "muted", cls: "text-[var(--color-muted-foreground)]", hint: "Wired and ready — fires on first real event" },
   disabled: { icon: PauseCircle, label: "Disabled", badge: "muted", cls: "text-[var(--color-muted-foreground)]" },
 }
 
@@ -292,6 +296,9 @@ function AutomationRow({
               {meta.channelHint && <span>· {meta.channelHint}</span>}
               <span>· last fire {timeAgo(lastFireIso)}</span>
             </div>
+            {health === "idle" && pres.hint && (
+              <span className="text-[11px] italic text-[var(--color-muted-foreground)]">{pres.hint}</span>
+            )}
           </div>
         </div>
         {meta.testId && (

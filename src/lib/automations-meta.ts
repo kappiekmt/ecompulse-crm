@@ -113,7 +113,9 @@ export const AUTOMATIONS: AutomationMeta[] = [
     category: "Webhook receiver",
     icon: Calendar,
     scheduleLabel: "On every Calendly invitee.created",
-    logEventTypes: ["slack.call_booked", "calendly.invitee.created"],
+    // calendly-webhook writes 3 different log lines per booking — the raw
+    // Calendly inbound, the lead-created data event, and the outbound Slack.
+    logEventTypes: ["slack.call_booked", "call.booked", "invitee.created"],
     toggleKey: "new_call_booked",
     testId: "call_booked",
     channelHint: "#bookings",
@@ -128,7 +130,7 @@ export const AUTOMATIONS: AutomationMeta[] = [
     category: "Webhook receiver",
     icon: CalendarX,
     scheduleLabel: "On every Calendly invitee.canceled",
-    logEventTypes: ["slack.call_cancelled", "calendly.invitee.canceled"],
+    logEventTypes: ["slack.call_cancelled", "call.cancelled", "invitee.canceled"],
     toggleKey: "call_cancelled",
     testId: "call_cancelled",
     channelHint: "#cancellations",

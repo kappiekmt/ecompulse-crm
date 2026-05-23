@@ -142,7 +142,8 @@ export const AUTOMATIONS: AutomationMeta[] = [
     category: "Slack notification",
     icon: DollarSign,
     scheduleLabel: "On Stripe payment / manual close",
-    logEventTypes: ["deal.closed", "payment.received", "stripe.payment.received"],
+    // notify-deal-closed logs "deal.closed"; stripe-webhook logs "payment.received" + "deal.won".
+    logEventTypes: ["deal.closed", "payment.received", "deal.won"],
     toggleKey: "payment_received",
     testId: "deal_closed",
     channelHint: "#payments (falls back to #bookings if no payments URL)",
@@ -157,7 +158,8 @@ export const AUTOMATIONS: AutomationMeta[] = [
     category: "DB trigger",
     icon: UserPlus,
     scheduleLabel: "On students.coach_id change",
-    logEventTypes: ["coach.assigned", "students.coach_assigned"],
+    // notify-coach-assigned logs "slack.coach_assigned".
+    logEventTypes: ["slack.coach_assigned"],
     channelHint: "#coach_assign",
   },
   {
@@ -167,7 +169,9 @@ export const AUTOMATIONS: AutomationMeta[] = [
     category: "Cron job",
     icon: GraduationCap,
     scheduleLabel: "On every Stripe payment",
-    logEventTypes: ["onboarding.discord_invite", "discord.create_invite"],
+    // discord-invite logs "discord.create_invite". (Coach auto-assign part of the
+    // chain shows up under the separate Coach Assigned row.)
+    logEventTypes: ["discord.create_invite"],
     toggleKey: "onboarding_chain",
     testId: "onboarding",
     hardKnownIssues: [
@@ -198,7 +202,17 @@ export const AUTOMATIONS: AutomationMeta[] = [
       "payment-recovery-sequence-cest",
       "payment-recovery-sequence-cet",
     ],
-    logEventTypes: ["recovery.check", "recovery.sequence"],
+    // check-overdue-payments logs "recovery.check"; payment-recovery-sequence
+    // logs "recovery.sequence" + per-stage rows when it acts (reminder_stub,
+    // access_paused_stub, closer_notified, admin_escalated).
+    logEventTypes: [
+      "recovery.check",
+      "recovery.sequence",
+      "recovery.reminder_stub",
+      "recovery.access_paused_stub",
+      "closer_notified",
+      "admin_escalated",
+    ],
     toggleKey: "recovery_enabled",
     testId: "recovery",
     channelHint: "#b-payment-failed",
@@ -214,7 +228,11 @@ export const AUTOMATIONS: AutomationMeta[] = [
     category: "Slack notification",
     icon: Coins,
     scheduleLabel: "On every payment that credits commission",
-    logEventTypes: ["commission.earned", "commission.weekly_recap"],
+    // notify-commission-earned logs "commission.earned.dm" on success and
+    // "commission.earned.no_slack_id" when the closer has no Slack ID.
+    // weekly_recap belongs to the separate "Weekly closer recap" row below —
+    // including it here used to falsely show this as Healthy.
+    logEventTypes: ["commission.earned.dm", "commission.earned.no_slack_id"],
     toggleKey: "commission_tracking_enabled",
     testId: "commission",
     channelHint: "Slack DM to the closer",
@@ -241,7 +259,9 @@ export const AUTOMATIONS: AutomationMeta[] = [
     category: "Webhook receiver",
     icon: Webhook,
     scheduleLabel: "On every Calendly event",
-    logEventTypes: ["calendly.invitee.created", "calendly.invitee.canceled"],
+    // calendly-webhook logs `evt.event` from Calendly's payload — i.e. raw
+    // "invitee.created" / "invitee.canceled" (no provider prefix).
+    logEventTypes: ["invitee.created", "invitee.canceled"],
   },
   {
     id: "stripe_inbound",
@@ -250,7 +270,11 @@ export const AUTOMATIONS: AutomationMeta[] = [
     category: "Webhook receiver",
     icon: Webhook,
     scheduleLabel: "On every Stripe event",
-    logEventTypes: ["stripe.payment.received", "stripe.payment.refunded"],
+    // stripe-webhook logs function-level outcomes ("payment.received",
+    // "payment.refunded", "deal.won") on success. signature_invalid /
+    // config_missing are excluded — they fire on probe attempts and would
+    // misleadingly flip this to "failed".
+    logEventTypes: ["payment.received", "payment.refunded", "deal.won"],
   },
 ]
 

@@ -9,6 +9,7 @@ import {
   Loader2,
   PlayCircle,
   RefreshCw,
+  FlaskConical,
 } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
 import { Card, CardContent } from "@/components/ui/card"
@@ -57,12 +58,13 @@ const HEALTH_PRESENTATION: Record<
   { icon: React.ComponentType<{ className?: string }>; label: string; badge: "success" | "warning" | "destructive" | "muted" | "secondary"; cls: string; hint?: string }
 > = {
   healthy: { icon: CheckCircle2, label: "Healthy", badge: "success", cls: "text-[var(--color-success)]" },
+  // "smoke_tested" = a Test fire has succeeded (Slack delivery / config wired)
+  // but no real production event has flowed through yet. Distinct from
+  // "Healthy" on purpose: we don't claim the production code path was
+  // exercised just because a smoke test passed.
+  smoke_tested: { icon: FlaskConical, label: "Smoke-tested", badge: "secondary", cls: "text-[var(--color-foreground)]", hint: "Smoke test passed — awaiting real production event" },
   warning: { icon: AlertTriangle, label: "Warning", badge: "warning", cls: "text-[var(--color-warning)]" },
   failed: { icon: XCircle, label: "Failed", badge: "destructive", cls: "text-[var(--color-destructive)]" },
-  // "idle" = automation is wired correctly but no real event has flowed through
-  // yet. Webhook receivers and event-driven automations start here; they flip
-  // to Healthy the moment a real event lands. The Test button fires a labelled
-  // smoke card directly to Slack — it doesn't change this status, by design.
   idle: { icon: CircleDashed, label: "Awaiting", badge: "muted", cls: "text-[var(--color-muted-foreground)]", hint: "Wired and ready — fires on first real event" },
   disabled: { icon: PauseCircle, label: "Disabled", badge: "muted", cls: "text-[var(--color-muted-foreground)]" },
 }
@@ -136,7 +138,7 @@ export function Automations() {
   }, [rows])
 
   const summary = React.useMemo(() => {
-    const s = { total: 0, healthy: 0, warning: 0, failed: 0, idle: 0, disabled: 0 }
+    const s = { total: 0, healthy: 0, smoke_tested: 0, warning: 0, failed: 0, idle: 0, disabled: 0 }
     for (const r of rows ?? []) {
       s.total++
       s[r.health]++
@@ -173,9 +175,10 @@ export function Automations() {
 
       <div className="flex flex-col gap-6 p-8">
         {/* Summary KPIs */}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
           <SummaryCard label="Total" value={summary.total} icon={Activity} tone="muted" />
           <SummaryCard label="Healthy" value={summary.healthy} icon={CheckCircle2} tone="success" />
+          <SummaryCard label="Smoke-tested" value={summary.smoke_tested} icon={FlaskConical} tone="muted" />
           <SummaryCard label="Warning" value={summary.warning} icon={AlertTriangle} tone="warning" />
           <SummaryCard label="Failed" value={summary.failed} icon={XCircle} tone="destructive" />
           <SummaryCard label="Idle / off" value={summary.idle + summary.disabled} icon={CircleDashed} tone="muted" />
@@ -296,7 +299,7 @@ function AutomationRow({
               {meta.channelHint && <span>· {meta.channelHint}</span>}
               <span>· last fire {timeAgo(lastFireIso)}</span>
             </div>
-            {health === "idle" && pres.hint && (
+            {pres.hint && (
               <span className="text-[11px] italic text-[var(--color-muted-foreground)]">{pres.hint}</span>
             )}
           </div>

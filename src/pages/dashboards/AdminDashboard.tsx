@@ -3,6 +3,7 @@ import { CalendarDays, Loader2, Send } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/PageHeader"
 import { AutomationHealthBanner } from "@/components/AutomationHealthBanner"
+import { SectionHeader } from "@/components/SectionHeader"
 import { StatCard } from "@/components/StatCard"
 import { supabase } from "@/lib/supabase"
 import { cn } from "@/lib/utils"
@@ -181,6 +182,9 @@ export function AdminDashboard() {
           </div>
         </div>
 
+        {/* Revenue — money in. Visually grouped so the eye reads "cash story
+            here" first, then drops down to "funnel story" next. */}
+        <SectionHeader title="Revenue" caption="Money in for this period" />
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
           <StatCard
             label="Cash Collected"
@@ -190,6 +194,19 @@ export function AdminDashboard() {
             label="Order Value"
             value={formatCurrency(kpi.data?.order_value_cents ?? 0)}
           />
+          <StatCard
+            label="Avg Order / Close"
+            value={formatCurrency(kpi.data?.avg_order_per_close_cents ?? 0)}
+          />
+          <StatCard
+            label="Avg Order / Call"
+            value={formatCurrency(kpi.data?.avg_order_per_call_cents ?? 0)}
+          />
+        </div>
+
+        {/* Pipeline — volume + conversion through the funnel. */}
+        <SectionHeader title="Pipeline" caption="Volume and conversion through the funnel" />
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
           <StatCard label="Calls Booked" value={(kpi.data?.calls_booked ?? 0).toString()} />
           <StatCard
             label="Show-up Rate"
@@ -203,16 +220,16 @@ export function AdminDashboard() {
             label="Cancel Rate"
             value={`${(kpi.data?.cancel_rate_pct ?? 0).toFixed(1)}%`}
           />
-          <StatCard
-            label="Avg Order / Call"
-            value={formatCurrency(kpi.data?.avg_order_per_call_cents ?? 0)}
-          />
-          <StatCard
-            label="Avg Order / Close"
-            value={formatCurrency(kpi.data?.avg_order_per_close_cents ?? 0)}
-          />
         </div>
 
+        {/* Team — the most actionable block, promoted above the trend charts. */}
+        <SectionHeader title="Team" caption="Who's converting, who's lagging" />
+        <TeamPerformance closers={teamCloserRows} setters={teamSetterRows} />
+
+        {/* Trends — info-only at the bottom. Two complementary charts (Cash
+            month-over-month + Cash week-over-week). Order Value/Week was
+            dropped — it duplicated the Cash chart pattern. */}
+        <SectionHeader title="Trends" caption="Cash trajectory + leaderboard" />
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <Leaderboard
             title="Leaderboard — Cash Collected"
@@ -220,30 +237,20 @@ export function AdminDashboard() {
             emptyText={
               closers.isLoading
                 ? "Loading…"
-                : "No closer revenue logged yet. Cash arrives from Stripe → first deal won."
+                : "No closer revenue logged yet — fills in from the first logged close."
             }
           />
           <LineChartCard
-            title="Cash Collected Per Month"
-            data={monthlyCash.length ? monthlyCash : emptySeries(12, "month")}
-            format={(v) => formatCurrency(v)}
-          />
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <LineChartCard
-            title="Order Value Per Week"
-            data={weeklyOrder.length ? weeklyOrder : emptySeries(12, "week")}
-            format={(v) => formatCurrency(v)}
-          />
-          <LineChartCard
-            title="Cash Collected Per Week"
+            title="Cash Collected · per week"
             data={weeklyCash.length ? weeklyCash : emptySeries(12, "week")}
             format={(v) => formatCurrency(v)}
           />
         </div>
-
-        <TeamPerformance closers={teamCloserRows} setters={teamSetterRows} />
+        <LineChartCard
+          title="Cash Collected · per month"
+          data={monthlyCash.length ? monthlyCash : emptySeries(12, "month")}
+          format={(v) => formatCurrency(v)}
+        />
       </div>
     </div>
   )

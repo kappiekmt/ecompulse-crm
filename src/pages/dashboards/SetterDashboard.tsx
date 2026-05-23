@@ -2,6 +2,7 @@ import * as React from "react"
 import { CalendarPlus, Loader2 } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
 import { Card, CardContent } from "@/components/ui/card"
+import { SectionHeader } from "@/components/SectionHeader"
 import { StatCard } from "@/components/StatCard"
 import { LeadDetailDrawer } from "@/components/leads/LeadDetailDrawer"
 import { StageBadge } from "@/components/leads/StageBadge"
@@ -81,6 +82,8 @@ export function SetterDashboard() {
       </header>
 
       <div className="flex flex-col gap-6 p-8">
+        {/* Performance — booking volume + conversion for the picked period. */}
+        <SectionHeader title="Performance" caption={`Your numbers · ${period}`} />
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
           <StatCard
             label={`Bookings · ${period}`}
@@ -100,13 +103,16 @@ export function SetterDashboard() {
           />
         </div>
 
-        {/* Commission earned + projected — same components as CloserDashboard,
-            passing role="setter" so OutstandingDealsTable shows the setter's
-            commission columns instead of the closer's. The KPI cards already
-            return the user's own rows via RLS regardless of role. */}
+        {/* Money — what you've earned + what's still coming. RLS scopes the
+            KPI rows to the current setter; OutstandingDealsTable receives
+            role="setter" so the Earned/Projected columns show the setter's
+            side of each deal (instead of the closer's). */}
+        <SectionHeader title="Money" caption="Earned + projected for deals you set" />
         <CommissionKpiCards leadsToday={stats.data?.bookings ?? 0} />
         <OutstandingDealsTable onOpenLead={setActiveId} role="setter" />
 
+        {/* Bookings — recent activity list. */}
+        <SectionHeader title="Bookings" caption="Your most recent bookings" />
         <Card>
           <CardContent className="flex flex-col gap-4 p-6">
             <div className="flex items-center gap-2.5">

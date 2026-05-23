@@ -3,6 +3,7 @@ import { CalendarClock, CheckCircle2, ChevronRight, Loader2 } from "lucide-react
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { SectionHeader } from "@/components/SectionHeader"
 import { StatCard } from "@/components/StatCard"
 import { LeadDetailDrawer } from "@/components/leads/LeadDetailDrawer"
 import { StageBadge } from "@/components/leads/StageBadge"
@@ -69,13 +70,14 @@ export function CloserDashboard() {
       </header>
 
       <div className="flex flex-col gap-6 p-8">
-        {/* Commission KPIs */}
+        {/* Money — what you've earned + what's still coming. Visually first
+            so the reward signal is the first thing a closer sees in the AM. */}
+        <SectionHeader title="Money" caption="Earned + projected for your deals" />
         <CommissionKpiCards leadsToday={todayCalls.data?.length ?? 0} />
-
-        {/* Money still coming — won deals with outstanding balance */}
         <OutstandingDealsTable onOpenLead={setActiveId} />
 
-        {/* Today's calls — the top priority for a closer */}
+        {/* Today — the action queue. */}
+        <SectionHeader title="Today" caption="Your calls + pre-call status" />
         <Card>
           <CardContent className="flex flex-col gap-4 p-6">
             <div className="flex items-center justify-between gap-3">
@@ -154,7 +156,8 @@ export function CloserDashboard() {
           </CardContent>
         </Card>
 
-        {/* My stats */}
+        {/* Performance — period-scoped numbers (today/week/month toggle). */}
+        <SectionHeader title="Performance" caption={`Your numbers · ${period}`} />
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
           <StatCard
             label={`Cash collected · ${period}`}
@@ -202,7 +205,8 @@ export function CloserDashboard() {
         {/* Recent commissions + ledger */}
         <RecentCommissionsAndLedger onOpenLead={setActiveId} />
 
-        {/* My pipeline */}
+        {/* Pipeline — current lead counts across stages. */}
+        <SectionHeader title="Pipeline" caption="Leads currently assigned to you" />
         <Card>
           <CardContent className="flex flex-col gap-4 p-6">
             <div className="flex items-center justify-between">

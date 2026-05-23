@@ -29,36 +29,77 @@ interface TestReport {
   results: TestResult[]
 }
 
+// Each user-visible toggle maps to one harness test id. Toggles without an
+// entry here just don't get a per-row "Test" button.
+const TOGGLE_TO_TEST_ID: Record<string, string> = {
+  new_call_booked: "call_booked",
+  call_cancelled: "call_cancelled",
+  payment_received: "deal_closed",
+  daily_eod_reports: "eod",
+  weekly_report: "eow",
+  pre_call_15m_reminder: "pre_call",
+  onboarding_chain: "onboarding",
+  recovery_enabled: "recovery",
+  commission_tracking_enabled: "commission",
+}
+
 export function AutomationsCard() {
   const qc = useQueryClient()
 
   const [testing, setTesting] = React.useState(false)
   const [report, setReport] = React.useState<TestReport | null>(null)
   const [testError, setTestError] = React.useState<string | null>(null)
+  // Per-row state for the inline "Test" button next to each toggle.
+  const [rowTesting, setRowTesting] = React.useState<string | null>(null)
+  const [rowResults, setRowResults] = React.useState<Record<string, TestResult>>({})
+
+  async function callHarness(tests?: string[]) {
+    const { data: sess } = await supabase.auth.getSession()
+    const jwt = sess.session?.access_token
+    if (!jwt) throw new Error("Not signed in")
+    const res = await fetch(
+      `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/automation-tests`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+        body: JSON.stringify(tests ? { tests } : {}),
+      }
+    )
+    const json = (await res.json()) as TestReport & { error?: string }
+    if (!res.ok) throw new Error(json.error ?? `Harness returned ${res.status}`)
+    return json
+  }
 
   async function runAllTests() {
     setTesting(true)
     setReport(null)
     setTestError(null)
     try {
-      const { data: sess } = await supabase.auth.getSession()
-      const jwt = sess.session?.access_token
-      if (!jwt) throw new Error("Not signed in")
-      const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/automation-tests`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
-          body: JSON.stringify({}),
-        }
-      )
-      const json = (await res.json()) as TestReport & { error?: string }
-      if (!res.ok) throw new Error(json.error ?? `Harness returned ${res.status}`)
-      setReport(json)
+      setReport(await callHarness())
     } catch (err) {
       setTestError((err as Error).message)
     } finally {
       setTesting(false)
+    }
+  }
+
+  async function runOneTest(toggleKey: string) {
+    const testId = TOGGLE_TO_TEST_ID[toggleKey]
+    if (!testId) return
+    setRowTesting(toggleKey)
+    try {
+      const json = await callHarness([testId])
+      const result =
+        json.results?.[0] ??
+        ({ id: testId, label: testId, ok: false, error: "No result returned" } as TestResult)
+      setRowResults((prev) => ({ ...prev, [toggleKey]: result }))
+    } catch (err) {
+      setRowResults((prev) => ({
+        ...prev,
+        [toggleKey]: { id: testId, label: testId, ok: false, error: (err as Error).message },
+      }))
+    } finally {
+      setRowTesting(null)
     }
   }
 
@@ -175,28 +216,65 @@ export function AutomationsCard() {
           </div>
         ) : (
           <ul className="flex flex-col divide-y divide-[var(--color-border)]">
-            {automations?.map((row) => (
-              <li
-                key={row.key}
-                className="flex items-start justify-between gap-4 py-3 first:pt-0 last:pb-0"
-              >
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-sm font-medium">{row.display_name}</span>
-                  {row.description && (
-                    <span className="text-xs text-[var(--color-muted-foreground)]">
-                      {row.description}
-                    </span>
+            {automations?.map((row) => {
+              const testId = TOGGLE_TO_TEST_ID[row.key]
+              const isRowTesting = rowTesting === row.key
+              const result = rowResults[row.key]
+              return (
+                <li
+                  key={row.key}
+                  className="flex flex-col gap-1.5 py-3 first:pt-0 last:pb-0"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-sm font-medium">{row.display_name}</span>
+                      {row.description && (
+                        <span className="text-xs text-[var(--color-muted-foreground)]">
+                          {row.description}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {testId && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => runOneTest(row.key)}
+                          disabled={isRowTesting || testing}
+                          title="Fire a one-off test for this automation"
+                        >
+                          {isRowTesting ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <PlayCircle className="h-3.5 w-3.5" />
+                          )}
+                          Test
+                        </Button>
+                      )}
+                      <Switch
+                        checked={row.enabled}
+                        onCheckedChange={(enabled) =>
+                          toggle.mutate({ key: row.key, enabled })
+                        }
+                        aria-label={`Toggle ${row.display_name}`}
+                      />
+                    </div>
+                  </div>
+                  {result && (
+                    <div className="ml-0.5 flex items-start gap-1.5 text-xs">
+                      {result.ok ? (
+                        <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-[var(--color-success)]" />
+                      ) : (
+                        <XCircle className="mt-0.5 h-3 w-3 shrink-0 text-[var(--color-destructive)]" />
+                      )}
+                      <span className="text-[var(--color-muted-foreground)]">
+                        {result.error ?? result.detail ?? (result.ok ? "passed" : "failed")}
+                      </span>
+                    </div>
                   )}
-                </div>
-                <Switch
-                  checked={row.enabled}
-                  onCheckedChange={(enabled) =>
-                    toggle.mutate({ key: row.key, enabled })
-                  }
-                  aria-label={`Toggle ${row.display_name}`}
-                />
-              </li>
-            ))}
+                </li>
+              )
+            })}
           </ul>
         )}
       </CardContent>

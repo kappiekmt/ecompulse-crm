@@ -100,11 +100,13 @@ function formatLocalTime(iso: string, timezone: string | null): string {
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
+  // isServiceRequest is the single auth check — accepts the project secret
+  // key (sb_secret_…) or, during the legacy-key migration window, a legacy
+  // service_role JWT. The old in-file authorize() below assumed every bearer
+  // was a JWT and rejected the non-JWT secret key with "Token is not a JWT";
+  // it's now unused.
   if (!isServiceRequest(req)) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } })
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, { status: 405 })
-
-  const auth = authorize(req)
-  if (auth !== true) return auth
 
   const supabase = adminClient()
 

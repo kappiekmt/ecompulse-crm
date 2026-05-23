@@ -119,7 +119,7 @@ serve(async (req) => {
   // We use a per-request client bound to that JWT to enforce RLS.
   const auth = req.headers.get("authorization") ?? ""
   const url = Deno.env.get("SUPABASE_URL")
-  const anon = Deno.env.get("SUPABASE_ANON_KEY")
+  const anon = (Deno.env.get("SB_PUBLISHABLE_KEY") ?? Deno.env.get("SUPABASE_ANON_KEY"))
   if (!url || !anon) return jsonResponse({ error: "Server misconfigured" }, { status: 500 })
 
   const userClient = createClient(url, anon, {

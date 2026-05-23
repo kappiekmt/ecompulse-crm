@@ -7,6 +7,7 @@
 // view (unique index on (closer_id, stat_date) makes this safe).
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts"
+import { isServiceRequest } from "../_shared/supabase-admin.ts"
 import { corsHeaders } from "../_shared/cors.ts"
 import { adminClient, logIntegration } from "../_shared/supabase-admin.ts"
 
@@ -19,6 +20,7 @@ function jsonResponse(body: unknown, init: ResponseInit = {}) {
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
+  if (!isServiceRequest(req)) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } })
   if (req.method !== "POST")
     return jsonResponse({ error: "Method not allowed" }, { status: 405 })
 
@@ -35,7 +37,7 @@ serve(async (req) => {
 
   // No supabase-js helper for raw SQL; pg-meta REST exposes /query.
   const url = Deno.env.get("SUPABASE_URL")
-  const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")
+  const key = (Deno.env.get("SB_SECRET_KEY") ?? (Deno.env.get("SB_SECRET_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")))
   if (!url || !key)
     return jsonResponse({ error: "SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing" }, { status: 500 })
 

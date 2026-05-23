@@ -320,7 +320,7 @@ serve(async (req) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+        Authorization: `Bearer ${(Deno.env.get("SB_SECRET_KEY") ?? (Deno.env.get("SB_SECRET_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")))}`,
       },
       body: JSON.stringify({ call_id: call.id }),
     }).catch((e) => console.error("[fathom-webhook] review-call dispatch failed", e))

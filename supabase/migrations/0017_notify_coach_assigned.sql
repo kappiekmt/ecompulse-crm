@@ -5,9 +5,10 @@
 -- auto-assign, and admin reassignment from the drawer alike. Async via
 -- pg_net so triggers never block the writing transaction.
 --
--- The service-role JWT below is the same long-lived token used by the
--- existing pg_cron jobs (see cron.job rows for eod-report). Rotate both
--- together if it's ever revoked.
+-- The bearer is read from Supabase Vault at runtime (secret name:
+-- `service_key`) — never embedded in this file or in pg_proc metadata.
+-- Same secret is used by every pg_cron job; rotate by updating the
+-- single Vault entry.
 
 create or replace function public.notify_coach_assigned() returns trigger
   language plpgsql
@@ -15,8 +16,12 @@ create or replace function public.notify_coach_assigned() returns trigger
 as $$
 declare
   v_url text := 'https://ecdqlgigczmiilvztsno.supabase.co/functions/v1/notify-coach-assigned';
-  v_jwt text := 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVjZHFsZ2lnY3ptaWlsdnp0c25vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NzQ4Njg5MywiZXhwIjoyMDkzMDYyODkzfQ.6snqxEUWpkkq4ZMmycxmCBS6ykuzx720F-UAUuVey5Q';
+  v_jwt text;
 begin
+  select decrypted_secret into v_jwt
+    from vault.decrypted_secrets
+    where name = 'service_key';
+
   -- No coach → nothing to notify.
   if NEW.coach_id is null then
     return NEW;

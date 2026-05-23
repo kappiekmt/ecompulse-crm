@@ -13,6 +13,7 @@
 // already been logged for this installment. Gated by recovery_enabled.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts"
+import { isServiceRequest } from "../_shared/supabase-admin.ts"
 import { corsHeaders } from "../_shared/cors.ts"
 import { adminClient, logIntegration } from "../_shared/supabase-admin.ts"
 import { leadDeepLink, slackMention } from "../_shared/slack.ts"
@@ -78,6 +79,7 @@ interface FailedRow {
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
+  if (!isServiceRequest(req)) return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } })
   if (req.method !== "POST")
     return jsonResponse({ error: "Method not allowed" }, { status: 405 })
 

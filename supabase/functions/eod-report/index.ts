@@ -168,9 +168,10 @@ async function authorize(req: Request): Promise<AuthResult | Response> {
   // team_members reads return all admins) and bypassed the 21:00 gate.
   const role = decodeJwtRole(token)
   if (role === "service_role") return { ok: true, source: "service_role" }
+  if (token === Deno.env.get("SB_SECRET_KEY")) return { ok: true, source: "service_role" }
 
   const url = Deno.env.get("SUPABASE_URL")
-  const anon = Deno.env.get("SUPABASE_ANON_KEY")
+  const anon = (Deno.env.get("SB_PUBLISHABLE_KEY") ?? Deno.env.get("SUPABASE_ANON_KEY"))
   if (!url || !anon) return jsonResponse({ error: "Server misconfigured" }, { status: 500 })
 
   const userClient = createClient(url, anon, {

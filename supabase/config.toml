@@ -39,7 +39,7 @@ verify_jwt = false
 # Reminder dispatcher — JWT enforced by gateway, role check inline.
 # pg_cron calls it every minute with the project's service_role JWT.
 [functions.dispatch-reminders]
-verify_jwt = true
+verify_jwt = false  # cron-only; auth enforced in-function via isServiceRequest (new secret key)
 
 # Admin-only "Test all automations" panel. JWT required (gateway-enforced).
 # Role check inline rejects anyone who isn't an admin team_member.
@@ -56,7 +56,7 @@ verify_jwt = true
 # Called by a students.coach_id Postgres trigger via pg_net (service_role
 # JWT). Gateway enforces auth.
 [functions.notify-coach-assigned]
-verify_jwt = true
+verify_jwt = false  # trigger-only; auth enforced in-function via isServiceRequest (new secret key)
 
 # Deal-closed Slack alert — closer or admin fires it from the Log Close
 # dialog. Gateway enforces JWT; the function uses the admin client to read
@@ -73,17 +73,17 @@ verify_jwt = true
 # period, flips them to status=failed, fires summary alert per closer to
 # #b-payment-failed. Service-role-callable from pg_cron.
 [functions.check-overdue-payments]
-verify_jwt = true
+verify_jwt = false  # cron-only; auth enforced in-function via isServiceRequest (new secret key)
 
 # Daily 10:00 Amsterdam — walks failed installments and fires the
 # next-stage escalation (Day 1 reminder stub → Day 3 closer alert →
 # Day 7 admin escalation → Day 14 access pause). Idempotent.
 [functions.payment-recovery-sequence]
-verify_jwt = true
+verify_jwt = false  # cron-only; auth enforced in-function via isServiceRequest (new secret key)
 
 # Every 15 min — refreshes closer_stats_daily materialized view via RPC.
 [functions.refresh-closer-stats]
-verify_jwt = true
+verify_jwt = false  # cron-only; auth enforced in-function via isServiceRequest (new secret key)
 
 # Closer DM with commission breakdown after each payment. App-triggered
 # from closes.ts after the payment row is inserted.
@@ -93,4 +93,4 @@ verify_jwt = true
 # Monday 09:00 Amsterdam — weekly closer recap DM with prior-4-week
 # baseline + Claude coaching note.
 [functions.weekly-closer-recap]
-verify_jwt = true
+verify_jwt = false  # cron-only; auth enforced in-function via isServiceRequest (new secret key)

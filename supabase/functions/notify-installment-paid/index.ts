@@ -104,8 +104,8 @@ serve(async (req) => {
   const fullyPaid = outstanding === 0
 
   const headerText = fullyPaid
-    ? `:tada: Final payment received — ${lead.full_name ?? "Unknown lead"}`
-    : `:moneybag: Payment received — ${lead.full_name ?? "Unknown lead"}`
+    ? `🎉  Final payment received  ·  ${lead.full_name ?? "Unknown lead"}`
+    : `🧾  Payment received  ·  ${lead.full_name ?? "Unknown lead"}`
 
   const message = {
     blocks: [

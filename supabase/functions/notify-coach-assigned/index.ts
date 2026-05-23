@@ -122,7 +122,7 @@ serve(async (req) => {
       type: "header",
       text: {
         type: "plain_text",
-        text: "EcomPulse CRM — STUDENTS · New Student Assigned",
+        text: `👋  New student assigned  ·  ${student.program}`,
         emoji: true,
       },
     },

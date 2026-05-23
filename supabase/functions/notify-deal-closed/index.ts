@@ -156,7 +156,7 @@ serve(async (req) => {
         type: "header",
         text: {
           type: "plain_text",
-          text: `:moneybag: Deal closed — ${tierLabel(deal.coaching_tier)}`,
+          text: `💰  Deal closed  ·  ${tierLabel(deal.coaching_tier)}`,
           emoji: true,
         },
       },

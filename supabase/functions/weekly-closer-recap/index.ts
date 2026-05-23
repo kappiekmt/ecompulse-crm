@@ -233,7 +233,7 @@ serve(async (req) => {
     const blocks = [
       {
         type: "header",
-        text: { type: "plain_text", text: ":calendar: Your week in review", emoji: true },
+        text: { type: "plain_text", text: "📈  Weekly recap  ·  Your week in review", emoji: true },
       },
       {
         type: "section",

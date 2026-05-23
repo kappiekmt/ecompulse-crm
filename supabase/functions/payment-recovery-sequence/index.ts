@@ -216,7 +216,7 @@ async function runStage(
           type: "header",
           text: {
             type: "plain_text",
-            text: `:rotating_light: Day 3 — closer action needed`,
+            text: `🚨  Day 3  ·  Closer action needed`,
             emoji: true,
           },
         },
@@ -270,7 +270,7 @@ async function runStage(
           type: "header",
           text: {
             type: "plain_text",
-            text: `:warning: Day 7 — admin escalation`,
+            text: `🚨  Day 7  ·  Admin escalation`,
             emoji: true,
           },
         },
@@ -344,7 +344,7 @@ async function runStage(
           type: "header",
           text: {
             type: "plain_text",
-            text: `:no_entry: Day 14 — ACCESS PAUSED`,
+            text: `🛑  Day 14  ·  Access paused`,
             emoji: true,
           },
         },

@@ -193,7 +193,7 @@ serve(async (req) => {
           type: "header",
           text: {
             type: "plain_text",
-            text: `:warning: Overdue payment${bucket.rows.length > 1 ? "s" : ""} detected`,
+            text: `⚠️  Overdue payment${bucket.rows.length > 1 ? "s" : ""} detected  ·  ${closer?.full_name ?? "Unassigned"}`,
             emoji: true,
           },
         },
@@ -234,7 +234,7 @@ serve(async (req) => {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `:bar_chart: *Daily sweep summary* — ${overdue.length} new overdue installment${overdue.length > 1 ? "s" : ""} across ${byCloser.size} closer${byCloser.size > 1 ? "s" : ""}. Total at risk: *${fmtEUR(totalCents)}*.`,
+            text: `📊  *Daily recovery sweep*  ·  ${overdue.length} new overdue installment${overdue.length > 1 ? "s" : ""} across ${byCloser.size} closer${byCloser.size > 1 ? "s" : ""}. Total at risk: *${fmtEUR(totalCents)}*.`,
           },
         },
       ],

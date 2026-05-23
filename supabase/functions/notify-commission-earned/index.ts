@@ -138,7 +138,7 @@ serve(async (req) => {
       type: "header",
       text: {
         type: "plain_text",
-        text: `:moneybag: Commission earned: ${fmtEUR(record.commission_amount_cents)}`,
+        text: `💸  Commission earned  ·  ${fmtEUR(record.commission_amount_cents)}`,
         emoji: true,
       },
     },

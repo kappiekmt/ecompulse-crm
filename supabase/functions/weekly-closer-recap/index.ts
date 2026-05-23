@@ -298,11 +298,15 @@ serve(async (req) => {
     }
   }
 
+  // A run with everyone legitimately skipped (no activity / no slack_user_id
+  // counts as not-sent but is reported as ok:true) is still a *success*. Only
+  // a real send failure (ok:false on any closer) flips this to "failed".
+  const anyFailure = results.some((r) => !r.ok)
   await logIntegration(supabase, {
     provider: "slack",
     direction: "outbound",
     event_type: "commission.weekly_recap",
-    status: sent === list.length ? "success" : "failed",
+    status: anyFailure ? "failed" : "success",
     request_payload: { window: [lastMon, thisMon] },
     response_payload: { sent, total: list.length, results },
   })

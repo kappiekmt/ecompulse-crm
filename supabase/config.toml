@@ -94,3 +94,8 @@ verify_jwt = true
 # baseline + Claude coaching note.
 [functions.weekly-closer-recap]
 verify_jwt = false  # cron-only; auth enforced in-function via isServiceRequest (new secret key)
+
+# Slack workspace probe — verifies the bot can see/post to the channels
+# notify-deal-closed and friends expect. Service-only; isServiceRequest gate.
+[functions.slack-diagnostic]
+verify_jwt = false

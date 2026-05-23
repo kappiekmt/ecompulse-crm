@@ -1,6 +1,7 @@
 import * as React from "react"
 import { CalendarDays, Loader2, Send } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { PageHeader } from "@/components/PageHeader"
 import { StatCard } from "@/components/StatCard"
 import { supabase } from "@/lib/supabase"
 import { cn } from "@/lib/utils"
@@ -120,44 +121,44 @@ export function AdminDashboard() {
 
   return (
     <div className="flex flex-col">
-      <header className="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--color-border)] px-8 py-6">
-        <div className="flex flex-col gap-1">
-          <h1 className="text-2xl font-semibold tracking-tight">Manager Dashboard</h1>
-          <p className="text-sm text-[var(--color-muted-foreground)]">
-            {profile?.full_name ?? "Preview"} — overview across the EcomPulse pipeline
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {(eodMsg ?? eowMsg) && (
-            <span
-              className={cn(
-                "text-xs font-medium",
-                (eodMsg ?? eowMsg)!.ok
-                  ? "text-[var(--color-success)]"
-                  : "text-[var(--color-destructive)]"
+      <PageHeader
+        title="Manager Dashboard"
+        description={`${profile?.full_name ?? "Preview"} — overview across the EcomPulse pipeline`}
+        actions={
+          <>
+            {(eodMsg ?? eowMsg) && (
+              <span
+                className={cn(
+                  "text-xs font-medium",
+                  (eodMsg ?? eowMsg)!.ok
+                    ? "text-[var(--color-success)]"
+                    : "text-[var(--color-destructive)]"
+                )}
+              >
+                {(eodMsg ?? eowMsg)!.text}
+              </span>
+            )}
+            {/* Convention: secondary action left, primary action right. EOW is the
+                less-frequent action (weekly), EOD is the daily primary trigger. */}
+            <Button variant="outline" onClick={() => sendReport("eow")} disabled={eowSending}>
+              {eowSending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <CalendarDays className="h-4 w-4" />
               )}
-            >
-              {(eodMsg ?? eowMsg)!.text}
-            </span>
-          )}
-          <Button onClick={() => sendReport("eod")} disabled={eodSending}>
-            {eodSending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Send className="h-4 w-4" />
-            )}
-            Send Team EOD
-          </Button>
-          <Button variant="outline" onClick={() => sendReport("eow")} disabled={eowSending}>
-            {eowSending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <CalendarDays className="h-4 w-4" />
-            )}
-            Send Weekly
-          </Button>
-        </div>
-      </header>
+              Send EOW
+            </Button>
+            <Button onClick={() => sendReport("eod")} disabled={eodSending}>
+              {eodSending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4" />
+              )}
+              Send EOD
+            </Button>
+          </>
+        }
+      />
 
       <div className="flex flex-col gap-6 p-8">
         <div className="flex flex-wrap items-center gap-3">

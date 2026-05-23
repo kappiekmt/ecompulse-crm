@@ -137,19 +137,17 @@ export const AUTOMATIONS: AutomationMeta[] = [
   },
   {
     id: "deal_closed",
-    name: "Deal closed / payment received",
-    description: "Closer logs a close OR Stripe payment fires → Slack deal card.",
+    name: "Deal closed",
+    description: "Closer logs a deal close in the CRM → Slack #payments alert + closer commission DM.",
     category: "Slack notification",
     icon: DollarSign,
-    scheduleLabel: "On Stripe payment / manual close",
-    // notify-deal-closed logs "deal.closed"; stripe-webhook logs "payment.received" + "deal.won".
-    logEventTypes: ["deal.closed", "payment.received", "deal.won"],
+    scheduleLabel: "On manual close (Log Close dialog)",
+    // Stripe webhook is no longer used — payments are logged manually via the
+    // CRM, so the only event that fires is notify-deal-closed's "deal.closed".
+    logEventTypes: ["deal.closed"],
     toggleKey: "payment_received",
     testId: "deal_closed",
-    channelHint: "#payments (falls back to #bookings if no payments URL)",
-    hardKnownIssues: [
-      { match: /Webhook signature error/, fix: "Check Stripe `webhook_secret` in Integrations → Stripe." },
-    ],
+    channelHint: "#payments (falls back to #bookings)",
   },
   {
     id: "coach_assigned",
@@ -164,13 +162,14 @@ export const AUTOMATIONS: AutomationMeta[] = [
   },
   {
     id: "onboarding",
-    name: "Onboarding chain",
-    description: "Stripe payment → coach auto-assign + Discord invite + Whop access.",
-    category: "Cron job",
+    name: "Discord invite",
+    description: "Admin/coach issues a Discord welcome invite for a student from the Students page.",
+    category: "Slack notification",
     icon: GraduationCap,
-    scheduleLabel: "On every Stripe payment",
-    // discord-invite logs "discord.create_invite". (Coach auto-assign part of the
-    // chain shows up under the separate Coach Assigned row.)
+    scheduleLabel: "Manual — Students page",
+    // discord-invite logs "discord.create_invite" each time an invite is issued.
+    // Note: the old "Stripe payment → auto invite" chain is dead — Stripe isn't
+    // integrated anymore, so the only path is the manual button.
     logEventTypes: ["discord.create_invite"],
     toggleKey: "onboarding_chain",
     testId: "onboarding",
@@ -263,19 +262,9 @@ export const AUTOMATIONS: AutomationMeta[] = [
     // "invitee.created" / "invitee.canceled" (no provider prefix).
     logEventTypes: ["invitee.created", "invitee.canceled"],
   },
-  {
-    id: "stripe_inbound",
-    name: "Stripe webhook",
-    description: "Inbound — Stripe posts payment_intent / charge events here.",
-    category: "Webhook receiver",
-    icon: Webhook,
-    scheduleLabel: "On every Stripe event",
-    // stripe-webhook logs function-level outcomes ("payment.received",
-    // "payment.refunded", "deal.won") on success. signature_invalid /
-    // config_missing are excluded — they fire on probe attempts and would
-    // misleadingly flip this to "failed".
-    logEventTypes: ["payment.received", "payment.refunded", "deal.won"],
-  },
+  // Stripe webhook removed from the dashboard — payments are logged manually
+  // via the CRM (Log Close dialog), no Stripe integration is in use. The
+  // stripe-webhook edge function stays deployed for the day this comes back.
 ]
 
 export const CATEGORY_ORDER: AutomationCategory[] = [

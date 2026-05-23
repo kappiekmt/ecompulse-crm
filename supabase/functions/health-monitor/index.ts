@@ -31,18 +31,21 @@ interface AutomationEntry {
   knownIssues: { match: RegExp | string; fix: string }[]
 }
 
+// Mirrors src/lib/automations-meta.ts — keep the two in sync. Stripe-related
+// rows are deliberately absent: the CRM no longer uses a Stripe integration,
+// payments are logged manually through the Log Close dialog.
 const AUTOMATIONS: AutomationEntry[] = [
   { id: "eod", name: "EOD report", logEventTypes: ["eod_report"], knownIssues: [{ match: /webhook URL not configured/, fix: "Set eod_webhook_url in Integrations → Slack." }] },
   { id: "eow", name: "EOW report", logEventTypes: ["eow_report"], knownIssues: [] },
   { id: "pre_call", name: "Pre-call reminder", logEventTypes: ["slack.pre_call_reminder"], knownIssues: [] },
-  { id: "call_booked", name: "Call booked", logEventTypes: ["slack.call_booked", "calendly.invitee.created"], knownIssues: [{ match: /Invalid signature/, fix: "Check Calendly signing_key." }] },
-  { id: "call_cancelled", name: "Call cancelled", logEventTypes: ["slack.call_cancelled", "calendly.invitee.canceled"], knownIssues: [] },
-  { id: "deal_closed", name: "Deal closed", logEventTypes: ["deal.closed", "payment.received", "stripe.payment.received"], knownIssues: [{ match: /Webhook signature error/, fix: "Check Stripe webhook_secret." }] },
-  { id: "coach_assigned", name: "Coach assigned", logEventTypes: ["coach.assigned", "students.coach_assigned"], knownIssues: [] },
-  { id: "onboarding", name: "Onboarding chain", logEventTypes: ["onboarding.discord_invite", "discord.create_invite"], knownIssues: [{ match: /discord.*not set|discord.*not connected/i, fix: "Connect Discord in Integrations → Discord." }] },
+  { id: "call_booked", name: "Call booked", logEventTypes: ["slack.call_booked", "call.booked", "invitee.created"], knownIssues: [{ match: /Invalid signature/, fix: "Check Calendly signing_key." }] },
+  { id: "call_cancelled", name: "Call cancelled", logEventTypes: ["slack.call_cancelled", "call.cancelled", "invitee.canceled"], knownIssues: [] },
+  { id: "deal_closed", name: "Deal closed", logEventTypes: ["deal.closed"], knownIssues: [] },
+  { id: "coach_assigned", name: "Coach assigned", logEventTypes: ["slack.coach_assigned"], knownIssues: [] },
+  { id: "onboarding", name: "Discord invite", logEventTypes: ["discord.create_invite"], knownIssues: [{ match: /discord.*not set|discord.*not connected/i, fix: "Connect Discord in Integrations → Discord." }] },
   { id: "installment_paid", name: "Installment paid", logEventTypes: ["installment.paid", "deal.fully_paid"], knownIssues: [] },
-  { id: "recovery", name: "Payment recovery", logEventTypes: ["recovery.check", "recovery.sequence"], knownIssues: [{ match: /SLACK_BOT_TOKEN|channel_not_found/, fix: "Slack bot missing scopes (chat:write.public) or not invited to #b-payment-failed." }] },
-  { id: "commission", name: "Commission DM", logEventTypes: ["commission.earned"], knownIssues: [{ match: /no slack_user_id/, fix: "Closer missing slack_user_id — set on Team page." }] },
+  { id: "recovery", name: "Payment recovery", logEventTypes: ["recovery.check", "recovery.sequence", "recovery.reminder_stub", "recovery.access_paused_stub", "closer_notified", "admin_escalated"], knownIssues: [{ match: /SLACK_BOT_TOKEN|channel_not_found/, fix: "Slack bot missing scopes (chat:write.public) or not invited to #b-payment-failed." }] },
+  { id: "commission", name: "Commission DM", logEventTypes: ["commission.earned.dm", "commission.earned.no_slack_id"], knownIssues: [{ match: /no slack_user_id/, fix: "Closer missing slack_user_id — set on Team page." }] },
   { id: "closer_recap", name: "Weekly closer recap", logEventTypes: ["commission.weekly_recap"], knownIssues: [] },
 ]
 

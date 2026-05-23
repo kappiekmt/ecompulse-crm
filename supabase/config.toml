@@ -99,3 +99,9 @@ verify_jwt = false  # cron-only; auth enforced in-function via isServiceRequest 
 # notify-deal-closed and friends expect. Service-only; isServiceRequest gate.
 [functions.slack-diagnostic]
 verify_jwt = false
+
+# Cron-only health watcher — every 30 min checks integrations_log for fresh
+# failures and posts an alert to Slack so admins get notified without having
+# to remember to open the Automations tab.
+[functions.health-monitor]
+verify_jwt = false

@@ -2,6 +2,7 @@ import * as React from "react"
 import { CalendarDays, Loader2, Send } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/PageHeader"
+import { AutomationHealthBanner } from "@/components/AutomationHealthBanner"
 import { StatCard } from "@/components/StatCard"
 import { supabase } from "@/lib/supabase"
 import { cn } from "@/lib/utils"
@@ -161,6 +162,7 @@ export function AdminDashboard() {
       />
 
       <div className="flex flex-col gap-6 p-8">
+        <AutomationHealthBanner />
         <div className="flex flex-wrap items-center gap-3">
           <DateRangeFilter value={range} onChange={setRange} />
           <div className="flex items-center gap-2">

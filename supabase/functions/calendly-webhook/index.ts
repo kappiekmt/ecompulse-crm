@@ -205,6 +205,12 @@ serve(async (req) => {
     }
 
     if (scheduledFor) {
+      // Clear any prior pending reminder (e.g. the old slot's, when this booking
+      // is the new half of a reschedule) so only the current booking fires.
+      await supabase.from("reminders")
+        .update({ status: "cancelled" })
+        .eq("lead_id", lead.id)
+        .eq("status", "scheduled")
       const fireAt = new Date(new Date(scheduledFor).getTime() - 15 * 60 * 1000).toISOString()
       await supabase.from("reminders").insert({
         lead_id: lead.id,
@@ -289,22 +295,27 @@ serve(async (req) => {
   if (evt.event === "invitee.canceled") {
     const p = evt.payload
 
-    // A reschedule arrives as invitee.canceled (old slot) + invitee.created
-    // (new slot). Treating the cancel half as a real cancellation marks the
-    // lead cancelled, kills reminders, and fires a false "Call cancelled" Slack
-    // alert — even though the call only moved.
+    // Calendly delivers webhooks out of order and with lag — a reschedule's
+    // old-slot cancel can land minutes AFTER the new-slot booking. We always
+    // surface the cancellation (activity log + dispatch + Slack, below) so the
+    // event is on record. But the lead's authoritative `stage` must only be
+    // downgraded when the cancel targets the lead's CURRENT booking. Otherwise
+    // a late reschedule-cancel flips a re-booked lead back to "cancelled" and
+    // its latest status can no longer be trusted.
     //
-    // We detect a reschedule two ways, because Calendly's delivery is neither
-    // ordered nor instant (the cancel can land minutes after the new booking):
-    //   1. The fast path: the cancel payload itself carries rescheduled=true /
-    //      new_invitee. Present regardless of delivery order — but only on
-    //      newer webhook API versions.
-    //   2. The order-independent path: if invitee.created for the new slot
-    //      already landed, it overwrote the lead's calendly_event_id with the
-    //      NEW event URI. So a cancel whose event URI no longer matches the
-    //      lead's stored event is stale — the lead has since been re-booked.
-    let rescheduleLeadId: string | null = null
-    let staleReschedule = p.rescheduled === true || Boolean(p.new_invitee)
+    // "Current" = not superseded. Superseded when Calendly flags a reschedule
+    // (rescheduled / new_invitee), or when invitee.created for the new slot has
+    // already overwritten the lead's calendly_event_id, so the cancel's event
+    // URI no longer matches the lead's live event.
+    //
+    // Timestamps use Calendly's own cancellation time, not now(), so the lead
+    // timeline stays chronologically correct regardless of delivery lag — you
+    // can backtrack exactly when each state change actually happened.
+    const cancelledAt = p.cancellation?.created_at ?? new Date().toISOString()
+    const cancelledEventUri = p.scheduled_event?.uri ?? null
+
+    let leadId: string | null = null
+    let cancelIsCurrent = true
     if (p.email) {
       const { data: lead } = await supabase
         .from("leads")
@@ -312,66 +323,54 @@ serve(async (req) => {
         .eq("email", p.email)
         .maybeSingle()
       if (lead) {
-        rescheduleLeadId = lead.id as string
-        const cancelledEventUri = p.scheduled_event?.uri ?? null
+        leadId = lead.id as string
         const currentEventUri = (lead as { calendly_event_id: string | null }).calendly_event_id
-        if (cancelledEventUri && currentEventUri && cancelledEventUri !== currentEventUri) {
-          staleReschedule = true
-        }
+        const superseded =
+          p.rescheduled === true ||
+          Boolean(p.new_invitee) ||
+          (cancelledEventUri != null &&
+            currentEventUri != null &&
+            cancelledEventUri !== currentEventUri)
+        cancelIsCurrent = !superseded
       }
     }
 
-    if (staleReschedule) {
-      // Cancel the stale pre-call reminder pointing at the old slot — the
-      // follow-up invitee.created inserts a fresh one for the new time.
-      if (rescheduleLeadId) {
-        await supabase.from("reminders")
-          .update({ status: "cancelled" })
-          .eq("lead_id", rescheduleLeadId)
-          .eq("status", "scheduled")
-      }
-      await logIntegration(supabase, {
-        provider: "calendly",
-        direction: "inbound",
-        event_type: "invitee.rescheduled",
-        status: "success",
-        request_payload: evt,
-        error: "Ignored cancellation half of a reschedule (no Slack alert sent)",
+    if (leadId) {
+      // Record the cancellation on the lead's timeline regardless, stamped with
+      // the real cancellation time.
+      await supabase.from("activities").insert({
+        lead_id: leadId,
+        type: "calendly.invitee.canceled",
+        payload: evt.payload as never,
+        created_at: cancelledAt,
       })
-      return new Response("ok (rescheduled)", { headers: corsHeaders })
-    }
 
-    if (p.email) {
-      const { data: lead } = await supabase
-        .from("leads")
-        .select("id")
-        .eq("email", p.email)
-        .maybeSingle()
-      if (lead) {
+      if (cancelIsCurrent) {
+        // Cancel is for the lead's live booking — downgrade status and kill the
+        // pending reminder.
         await supabase
           .from("leads")
-          .update({
-            stage: "cancelled",
-            cancelled_at: new Date().toISOString(),
-          })
-          .eq("id", lead.id)
-        await supabase.from("activities").insert({
-          lead_id: lead.id,
-          type: "calendly.invitee.canceled",
-          payload: evt.payload as never,
-        })
+          .update({ stage: "cancelled", cancelled_at: cancelledAt })
+          .eq("id", leadId)
         await supabase.from("reminders")
           .update({ status: "cancelled" })
-          .eq("lead_id", lead.id)
+          .eq("lead_id", leadId)
           .eq("status", "scheduled")
       }
+      // Superseded (reschedule old slot): leave stage + reminders alone — the
+      // invitee.created for the new slot owns the lead's current status and its
+      // own reminder.
     }
+
     await logIntegration(supabase, {
       provider: "calendly",
       direction: "inbound",
       event_type: evt.event,
       status: "success",
       request_payload: evt,
+      error: cancelIsCurrent
+        ? undefined
+        : "Superseded by a newer booking — logged + notified, lead status kept",
     })
 
     await dispatchEvent(supabase, {
@@ -418,7 +417,11 @@ serve(async (req) => {
           closer: { full_name?: string; slack_user_id?: string | null; timezone?: string | null } | null
         }
         cancelledLeadId = ll.id
-        cancelledScheduledAt = ll.scheduled_at
+        // Prefer the cancelled event's own start_time so the "Was scheduled"
+        // line reflects the slot that was actually cancelled. On a reschedule
+        // the lead's scheduled_at has already moved to the new slot, which would
+        // otherwise show the wrong time.
+        cancelledScheduledAt = p.scheduled_event?.start_time ?? ll.scheduled_at
         cancelledPhone = ll.phone
         cancelledInstagram = ll.instagram
         cancelledEventName = ll.calendly_event_name

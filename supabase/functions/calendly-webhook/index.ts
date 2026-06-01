@@ -53,6 +53,12 @@ interface CalendlyEvent {
       reason?: string
       created_at?: string
     }
+    // Set by Calendly when this cancellation is the first half of a reschedule.
+    // A reschedule = invitee.canceled (rescheduled=true, new_invitee set) for the
+    // old slot, immediately followed by invitee.created for the new slot.
+    rescheduled?: boolean
+    new_invitee?: string | null
+    old_invitee?: string | null
     questions_and_answers?: { question: string; answer: string }[]
   }
 }
@@ -282,6 +288,39 @@ serve(async (req) => {
 
   if (evt.event === "invitee.canceled") {
     const p = evt.payload
+
+    // Reschedules arrive as invitee.canceled (rescheduled=true) followed by a
+    // fresh invitee.created for the new slot. Treating this as a real
+    // cancellation marks the lead cancelled, kills reminders, and fires a false
+    // "Call cancelled" Slack alert — even though the call was only moved. The
+    // subsequent invitee.created re-books the lead, so we just log + ignore.
+    if (p.rescheduled === true || p.new_invitee) {
+      // Cancel the stale pre-call reminder pointing at the old slot — the
+      // follow-up invitee.created inserts a fresh one for the new time.
+      if (p.email) {
+        const { data: lead } = await supabase
+          .from("leads")
+          .select("id")
+          .eq("email", p.email)
+          .maybeSingle()
+        if (lead) {
+          await supabase.from("reminders")
+            .update({ status: "cancelled" })
+            .eq("lead_id", lead.id)
+            .eq("status", "scheduled")
+        }
+      }
+      await logIntegration(supabase, {
+        provider: "calendly",
+        direction: "inbound",
+        event_type: "invitee.rescheduled",
+        status: "success",
+        request_payload: evt,
+        error: "Ignored cancellation half of a reschedule (no Slack alert sent)",
+      })
+      return new Response("ok (rescheduled)", { headers: corsHeaders })
+    }
+
     if (p.email) {
       const { data: lead } = await supabase
         .from("leads")

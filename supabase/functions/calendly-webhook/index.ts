@@ -289,26 +289,46 @@ serve(async (req) => {
   if (evt.event === "invitee.canceled") {
     const p = evt.payload
 
-    // Reschedules arrive as invitee.canceled (rescheduled=true) followed by a
-    // fresh invitee.created for the new slot. Treating this as a real
-    // cancellation marks the lead cancelled, kills reminders, and fires a false
-    // "Call cancelled" Slack alert — even though the call was only moved. The
-    // subsequent invitee.created re-books the lead, so we just log + ignore.
-    if (p.rescheduled === true || p.new_invitee) {
+    // A reschedule arrives as invitee.canceled (old slot) + invitee.created
+    // (new slot). Treating the cancel half as a real cancellation marks the
+    // lead cancelled, kills reminders, and fires a false "Call cancelled" Slack
+    // alert — even though the call only moved.
+    //
+    // We detect a reschedule two ways, because Calendly's delivery is neither
+    // ordered nor instant (the cancel can land minutes after the new booking):
+    //   1. The fast path: the cancel payload itself carries rescheduled=true /
+    //      new_invitee. Present regardless of delivery order — but only on
+    //      newer webhook API versions.
+    //   2. The order-independent path: if invitee.created for the new slot
+    //      already landed, it overwrote the lead's calendly_event_id with the
+    //      NEW event URI. So a cancel whose event URI no longer matches the
+    //      lead's stored event is stale — the lead has since been re-booked.
+    let rescheduleLeadId: string | null = null
+    let staleReschedule = p.rescheduled === true || Boolean(p.new_invitee)
+    if (p.email) {
+      const { data: lead } = await supabase
+        .from("leads")
+        .select("id, calendly_event_id")
+        .eq("email", p.email)
+        .maybeSingle()
+      if (lead) {
+        rescheduleLeadId = lead.id as string
+        const cancelledEventUri = p.scheduled_event?.uri ?? null
+        const currentEventUri = (lead as { calendly_event_id: string | null }).calendly_event_id
+        if (cancelledEventUri && currentEventUri && cancelledEventUri !== currentEventUri) {
+          staleReschedule = true
+        }
+      }
+    }
+
+    if (staleReschedule) {
       // Cancel the stale pre-call reminder pointing at the old slot — the
       // follow-up invitee.created inserts a fresh one for the new time.
-      if (p.email) {
-        const { data: lead } = await supabase
-          .from("leads")
-          .select("id")
-          .eq("email", p.email)
-          .maybeSingle()
-        if (lead) {
-          await supabase.from("reminders")
-            .update({ status: "cancelled" })
-            .eq("lead_id", lead.id)
-            .eq("status", "scheduled")
-        }
+      if (rescheduleLeadId) {
+        await supabase.from("reminders")
+          .update({ status: "cancelled" })
+          .eq("lead_id", rescheduleLeadId)
+          .eq("status", "scheduled")
       }
       await logIntegration(supabase, {
         provider: "calendly",

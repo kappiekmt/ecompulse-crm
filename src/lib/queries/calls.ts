@@ -4,7 +4,9 @@ import type {
   CallAiReview,
   CallOutcome,
   CallSource,
+  LossReasonCategory,
   ObjectionCategory,
+  WinReasonCategory,
 } from "@/lib/database.types"
 
 export interface CallListRow {
@@ -90,6 +92,9 @@ export interface CallDetail extends CallListRow {
   outcome_notes: string | null
   outcome_tagged_at: string | null
   outcome_tagged_by: string | null
+  won_reason: WinReasonCategory | null
+  lost_reason: LossReasonCategory | null
+  lost_to_competitor: string | null
   ended_at: string | null
   attendee_emails: string[] | null
   host_email: string | null
@@ -117,7 +122,7 @@ export function useCall(callId: string | null) {
       const { data, error } = await supabase
         .from("calls")
         .select(
-          "id, lead_id, closer_id, deal_id, source, fathom_share_url, recording_url, transcript_url, title, started_at, ended_at, duration_seconds, host_email, attendee_emails, summary, transcript, outcome, outcome_notes, outcome_tagged_by, outcome_tagged_at, ai_review, ai_reviewed_at, lead:leads(id, full_name, email), closer:team_members!calls_closer_id_fkey(id, full_name), deal:deals!calls_deal_id_fkey(id, amount_cents, currency, status), action_items:call_action_items(id, description, assignee, due_date, completed, source), objections:call_objections(id, quote, source, objection:objections(id, label, category))"
+          "id, lead_id, closer_id, deal_id, source, fathom_share_url, recording_url, transcript_url, title, started_at, ended_at, duration_seconds, host_email, attendee_emails, summary, transcript, outcome, outcome_notes, outcome_tagged_by, outcome_tagged_at, won_reason, lost_reason, lost_to_competitor, ai_review, ai_reviewed_at, lead:leads(id, full_name, email), closer:team_members!calls_closer_id_fkey(id, full_name), deal:deals!calls_deal_id_fkey(id, amount_cents, currency, status), action_items:call_action_items(id, description, assignee, due_date, completed, source), objections:call_objections(id, quote, source, objection:objections(id, label, category))"
         )
         .eq("id", callId!)
         .maybeSingle()
@@ -134,13 +139,26 @@ export function useUpdateCallOutcome() {
       callId: string
       outcome: CallOutcome
       notes?: string | null
+      wonReason?: WinReasonCategory | null
+      lostReason?: LossReasonCategory | null
+      lostToCompetitor?: string | null
       taggedBy: string
     }) => {
+      // Reasons only make sense for their matching outcome — a DB check
+      // constraint enforces this, so null out the irrelevant ones here.
+      const isWon = args.outcome === "closed_won"
+      const isLost = args.outcome === "lost"
       const { error } = await supabase
         .from("calls")
         .update({
           outcome: args.outcome,
           outcome_notes: args.notes ?? null,
+          won_reason: isWon ? args.wonReason ?? null : null,
+          lost_reason: isLost ? args.lostReason ?? null : null,
+          lost_to_competitor:
+            isLost && args.lostReason === "competitor"
+              ? args.lostToCompetitor?.trim() || null
+              : null,
           outcome_tagged_by: args.taggedBy,
           outcome_tagged_at: new Date().toISOString(),
         })
@@ -314,6 +332,39 @@ export function useObjectionRollup(filters: {
       const { data, error } = await q
       if (error) throw error
       return (data ?? []) as ObjectionRollupRow[]
+    },
+  })
+}
+
+export interface LossReasonRollupRow {
+  closer_id: string | null
+  lost_reason: LossReasonCategory
+  week_start: string
+  occurrences: number
+  example_call_ids: string[]
+}
+
+export function useLossReasonRollup(filters: {
+  closerId?: string | null
+  weeksBack?: number
+} = {}) {
+  return useQuery<LossReasonRollupRow[]>({
+    queryKey: ["loss-reason-rollup", filters],
+    enabled: isSupabaseConfigured,
+    queryFn: async () => {
+      let q = supabase
+        .from("loss_reason_rollup")
+        .select("closer_id, lost_reason, week_start, occurrences, example_call_ids")
+        .order("occurrences", { ascending: false })
+      if (filters.closerId) q = q.eq("closer_id", filters.closerId)
+      if (filters.weeksBack) {
+        const since = new Date()
+        since.setDate(since.getDate() - filters.weeksBack * 7)
+        q = q.gte("week_start", since.toISOString().slice(0, 10))
+      }
+      const { data, error } = await q
+      if (error) throw error
+      return (data ?? []) as LossReasonRollupRow[]
     },
   })
 }

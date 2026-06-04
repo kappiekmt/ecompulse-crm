@@ -21,6 +21,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Select } from "@/components/ui/select"
+import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { OUTCOME_VARIANTS, formatDuration } from "@/pages/Calls"
@@ -34,7 +35,12 @@ import {
 import { useAuth } from "@/lib/auth"
 import { supabase } from "@/lib/supabase"
 import { formatCurrency, formatDateTime } from "@/lib/utils"
-import type { CallOutcome, ObjectionCategory } from "@/lib/database.types"
+import type {
+  CallOutcome,
+  LossReasonCategory,
+  ObjectionCategory,
+  WinReasonCategory,
+} from "@/lib/database.types"
 
 interface CallDetailDrawerProps {
   callId: string | null
@@ -71,6 +77,29 @@ const CATEGORY_LABEL: Record<ObjectionCategory, string> = {
   other: "Other",
 }
 
+const WIN_REASON_OPTIONS: { value: WinReasonCategory; label: string }[] = [
+  { value: "urgency_pain", label: "Strong pain / urgency" },
+  { value: "trust_rapport", label: "Trust & rapport" },
+  { value: "roi_value", label: "Clear ROI / value case" },
+  { value: "social_proof", label: "Social proof / testimonials" },
+  { value: "payment_flexibility", label: "Payment plan / flexibility" },
+  { value: "offer_bonus", label: "Offer / bonus stack" },
+  { value: "follow_up_persistence", label: "Persistence / good follow-up" },
+  { value: "other", label: "Other" },
+]
+
+const LOSS_REASON_OPTIONS: { value: LossReasonCategory; label: string }[] = [
+  { value: "price", label: "Price / budget" },
+  { value: "timing", label: "Timing — not now" },
+  { value: "authority", label: "Needed another decision-maker" },
+  { value: "trust", label: "Didn't believe it would work" },
+  { value: "no_need", label: "No real need / fit" },
+  { value: "spouse", label: "Spouse / partner said no" },
+  { value: "went_cold", label: "Ghosted / went cold" },
+  { value: "competitor", label: "Chose a competitor" },
+  { value: "other", label: "Other" },
+]
+
 function Inner({ callId, onClose: _onClose }: { callId: string; onClose: () => void }) {
   const { profile } = useAuth()
   const call = useCall(callId)
@@ -81,12 +110,18 @@ function Inner({ callId, onClose: _onClose }: { callId: string; onClose: () => v
 
   const [outcome, setOutcome] = React.useState<CallOutcome>("pending")
   const [notes, setNotes] = React.useState("")
+  const [wonReason, setWonReason] = React.useState<WinReasonCategory | "">("")
+  const [lostReason, setLostReason] = React.useState<LossReasonCategory | "">("")
+  const [lostToCompetitor, setLostToCompetitor] = React.useState("")
   const [tab, setTab] = React.useState<"summary" | "transcript" | "objections" | "ai">("summary")
 
   React.useEffect(() => {
     if (call.data) {
       setOutcome(call.data.outcome)
       setNotes(call.data.outcome_notes ?? "")
+      setWonReason(call.data.won_reason ?? "")
+      setLostReason(call.data.lost_reason ?? "")
+      setLostToCompetitor(call.data.lost_to_competitor ?? "")
     }
   }, [call.data])
 
@@ -112,17 +147,31 @@ function Inner({ callId, onClose: _onClose }: { callId: string; onClose: () => v
   const flagged = c.ai_review?.needs_review === true
   const attachedObjectionIds = new Set(c.objections.map((o) => o.objection?.id).filter(Boolean))
 
+  const isWon = outcome === "closed_won"
+  const isLost = outcome === "lost"
+
   function save() {
     if (!profile?.id) return
     update.mutate({
       callId,
       outcome,
       notes: notes.trim() || null,
+      wonReason: isWon ? (wonReason || null) : null,
+      lostReason: isLost ? (lostReason || null) : null,
+      lostToCompetitor:
+        isLost && lostReason === "competitor" ? lostToCompetitor.trim() || null : null,
       taggedBy: profile.id,
     })
   }
 
-  const dirty = c.outcome !== outcome || (c.outcome_notes ?? "") !== notes
+  const dirty =
+    c.outcome !== outcome ||
+    (c.outcome_notes ?? "") !== notes ||
+    (isWon && (c.won_reason ?? "") !== wonReason) ||
+    (isLost && (c.lost_reason ?? "") !== lostReason) ||
+    (isLost &&
+      lostReason === "competitor" &&
+      (c.lost_to_competitor ?? "") !== lostToCompetitor)
 
   return (
     <>
@@ -208,6 +257,52 @@ function Inner({ callId, onClose: _onClose }: { callId: string; onClose: () => v
                 </option>
               ))}
             </Select>
+
+            {isWon && (
+              <div className="flex flex-col gap-1.5 rounded-md border border-[var(--color-success)]/40 bg-[var(--color-success)]/5 p-3">
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-success)]">
+                  Why did it close?
+                </label>
+                <Select
+                  value={wonReason}
+                  onChange={(e) => setWonReason(e.target.value as WinReasonCategory | "")}
+                >
+                  <option value="">— Select the main reason —</option>
+                  {WIN_REASON_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            )}
+
+            {isLost && (
+              <div className="flex flex-col gap-1.5 rounded-md border border-[var(--color-destructive)]/40 bg-[var(--color-destructive)]/5 p-3">
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-destructive)]">
+                  Why was it lost?
+                </label>
+                <Select
+                  value={lostReason}
+                  onChange={(e) => setLostReason(e.target.value as LossReasonCategory | "")}
+                >
+                  <option value="">— Select the main reason —</option>
+                  {LOSS_REASON_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </Select>
+                {lostReason === "competitor" && (
+                  <Input
+                    placeholder="Which competitor / alternative?"
+                    value={lostToCompetitor}
+                    onChange={(e) => setLostToCompetitor(e.target.value)}
+                  />
+                )}
+              </div>
+            )}
+
             <Textarea
               placeholder="Notes (what was the deciding factor? next step?)"
               rows={3}

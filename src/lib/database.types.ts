@@ -47,6 +47,27 @@ export type ObjectionCategory =
 
 export type CallSource = "fathom" | "manual"
 
+export type WinReasonCategory =
+  | "urgency_pain"
+  | "trust_rapport"
+  | "roi_value"
+  | "social_proof"
+  | "payment_flexibility"
+  | "offer_bonus"
+  | "follow_up_persistence"
+  | "other"
+
+export type LossReasonCategory =
+  | "price"
+  | "timing"
+  | "authority"
+  | "trust"
+  | "no_need"
+  | "spouse"
+  | "went_cold"
+  | "competitor"
+  | "other"
+
 export interface CallAiReview {
   framework_score?: number
   strengths?: string[]
@@ -451,6 +472,9 @@ export interface Database {
         outcome_notes: string | null
         outcome_tagged_by: string | null
         outcome_tagged_at: string | null
+        won_reason: WinReasonCategory | null
+        lost_reason: LossReasonCategory | null
+        lost_to_competitor: string | null
         ai_review: CallAiReview | null
         ai_reviewed_at: string | null
         created_at: string
@@ -590,6 +614,13 @@ export interface Database {
         objection_id: string
         label: string
         category: ObjectionCategory
+        week_start: string
+        occurrences: number
+        example_call_ids: string[]
+      }>
+      loss_reason_rollup: Vw<{
+        closer_id: string | null
+        lost_reason: LossReasonCategory
         week_start: string
         occurrences: number
         example_call_ids: string[]

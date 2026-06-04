@@ -121,13 +121,13 @@ Four roles in the `team_role` enum: `admin`, `closer`, `setter`, `coach`. Identi
 
 ### 3.3 Core lead → student lifecycle
 
-The `leads` row is the spine; the `lead_stage` enum tracks where each lead is (`new → booked → confirmed → showed/no_show → pitched → won/lost → onboarding → active_student → churned/refunded`, plus a `cancelled` stage and short/long follow-up stages added later).
+The `leads` row is the spine; the `lead_stage` enum tracks where each lead is (`new → booked → showed/no_show → pitched → won/lost → onboarding → active_student → churned/refunded`, plus `confirmed` — a manual-only Pipeline column that no booking/call/payment flow ever sets automatically — a `cancelled` stage, and short/long follow-up stages added later).
 
 1. **Booking** — `calendly-webhook` receives `invitee.created`. It matches the Calendly host email to an active `team_member` with role `closer`/`admin` → that's `closer_id`. It upserts the lead (`onConflict: email`) to stage `booked` with `booked_at`, `scheduled_at`, Calendly join/cancel/reschedule URLs, event id/name, and UTM attribution; inserts a `pre_call_15m` reminder at `scheduled_at − 15min` (cancelling any prior pending one); logs an `activities` row + `integrations_log`; emits the `call.booked` event; and posts a rich Slack alert to the bookings channel with an @-mention, a prefilled WhatsApp pre-call button, Join/Reschedule/Email/Open-in-CRM buttons. `invitee.canceled` downgrades the lead to `cancelled` **only when the cancel targets the lead's current booking** (reschedule-aware via `rescheduled`/`new_invitee`/event-URI comparison), always logging + notifying regardless.
 2. **Pre-call SOP** — Seeded SOPs exist (a pre-call research checklist, discovery-call structure, objection cheat sheet, per-role onboarding starter packs) in the `sops` table, gated by `visible_to[]`. The closer toggles "Pre-call started" on the lead; the 15-min reminder surfaces pre-call status.
 3. **Call** — Fathom records the call (see §3.4) → a `calls` row.
 4. **Outcome tagging** — The closer tags the call's `outcome` in the drawer. Trigger `apply_call_outcome_to_lead()` auto-advances the lead's stage (`closed_won→won`, `lost`/`not_qualified→lost`, `pitched`/`follow_up→pitched`, `no_show→no_show`), stamps `closed_at`, and writes a `call.outcome_tagged` activity. `closed_won`/`lost` open a structured reason form.
-5. **Close logged** — From the Pipeline, a closer logs the deal: a `deals` row (`closed_by_id = me`, `coaching_tier`, `amount_cents`, `notes`) plus a closer-defined custom `deal_installments` schedule (one row per payment with its own `due_date`). `notify-deal-closed` posts the deal + schedule to the payments Slack channel.
+5. **Close logged** — From the Pipeline, a closer logs the deal: a `deals` row (`closed_by_id = me`, `coaching_tier`, `amount_cents`, `notes`) plus a closer-defined custom `deal_installments` schedule (one row per payment with its own `due_date`). This client path also flips the lead to `won` directly and inserts a manual `payments` row for the paid-at-close amount (which fires the commission trigger). `notify-deal-closed` posts the deal + schedule to the payments Slack channel. *(So a lead can reach `won` three ways: the call-outcome trigger, this manual close, or the Stripe webhook.)*
 6. **Payment** — `stripe-webhook` on `checkout.session.completed` resolves the tier (amount-based first, then Stripe metadata, then the lead's `intended_tier`), flips the lead → `won`, inserts the `deals` row + `payments` row + activity, and emits `payment.received` + `deal.won`.
 7. **Onboarding chain** — Still inside the Stripe handler, a `students` row is created (always, for data integrity) and, when the `onboarding_chain` automation is enabled, a coach is auto-assigned via `pickLeastLoadedCoach` (fewest pending/in-progress students among active coaches/admins). `seed_student_milestones()` seeds an `onboarding_checklist` template by program. `discord-invite` mints a one-time welcome-channel invite (saved on the student); Whop access + Discord roles are the next steps in the chain. Coach assignment fires a Slack "New student assigned" notice via the `notify_coach_assigned()` trigger.
 8. **Ongoing** — Installments drive payment recovery (§3.5); each non-refund payment auto-creates a `commission_records` row (§3.5); refunds flip the deal to `refunded` and claw the commission back.
@@ -137,12 +137,12 @@ The `leads` row is the spine; the `lead_stage` enum tracks where each lead is (`
 `fathom-webhook` receives "meeting completed" (forgiving to Fathom's variable payload shape — flat or nested `meeting`/`recording`). It:
 - **Matches the closer** by host email → active `team_member` (`closer`/`admin`).
 - **Matches the lead** by the first attendee email that isn't the host → `leads`.
-- **Links the deal** = the lead's most recent deal.
+- **Links the deal** = the lead's most recent deal (by `created_at`, any status — not status-filtered).
 - **Upserts a `calls` row** (`onConflict: fathom_id`, so retries are idempotent) with recording/share/transcript URLs, timing, participants, and Fathom AI summary.
 - **Replaces Fathom-sourced `call_action_items`** (Fathom is authoritative), logs a `call.recorded` activity, emits the `call.recorded` event.
-- **Kicks off `review-call` fire-and-forget** when a transcript exists. `review-call` calls Claude (Sonnet, cached framework rubric in the system prompt) to score the call (discovery / pitch / objection / close), produce strengths/improvements, extract objections against the catalog, and set `needs_review`; the result lands in `calls.ai_review`.
+- **Kicks off `review-call` fire-and-forget** when a transcript exists. `review-call` calls Claude (Sonnet, cached framework rubric in the system prompt) to score the call (discovery / pitch / objection / close), produce strengths/improvements, and set `needs_review`; the full review lands in `calls.ai_review`. It also tries to **auto-tag** the objections it detects into `call_objections` (`source='ai'`) so AI-found objections would roll up next to manually-tagged ones — but that insert currently no-ops because the `call_source` enum only allows `'fathom'`/`'manual'` (a known one-line fix), so today only the closer's manual objection tags persist.
 
-The closer then tags `outcome` in the Call drawer. `closed_won`/`lost` opens the structured win/loss reason form (`win_reason_category` / `loss_reason_category` enums; `lost_to_competitor` free text), constrained so a reason matches its outcome. Objections tagged on a call (`call_objections`) roll up via the `objection_rollup` view (per closer, per week) into the Objection library and the "Why we're losing" card; loss reasons roll up via `loss_reason_rollup`.
+The closer then tags `outcome` in the Call drawer. `closed_won`/`lost` opens the structured win/loss reason form (`win_reason_category` / `loss_reason_category` enums; `lost_to_competitor` free text), constrained so a reason matches its outcome. Objections are tagged on a call into `call_objections` — manually by the closer (drawer Objections tab, `source='manual'`) and, by design, automatically by `review-call` (`source='ai'`, currently blocked by the enum gap above) — and roll up via the `objection_rollup` view (per closer, per week) into the Objection library and the "Why we're losing" card; loss reasons roll up via `loss_reason_rollup`.
 
 ### 3.5 Automations & notifications
 
@@ -231,7 +231,7 @@ All in `src/pages/`:
 - **Reports.tsx** — funnel conversion, closer/setter leaderboards, UTM performance.
 - **Automations.tsx** — live health for every CRM automation; rows are clickable/testable.
 - **Team.tsx** — manage members (roles, capacity, commission splits), invites.
-- **ImportLeads.tsx** — CSV bulk lead import with column mapping + preview.
+- **ImportLeads.tsx** — *scaffolded placeholder* for CSV bulk lead import: a static dropzone UI only (no file handler, column mapping, preview, or insert yet). The `imports`/`import_rows` tables exist in the schema but nothing writes them — CSV import is not a working lead-creation path today.
 - **ImportPayments.tsx** — backfill historical Stripe charges / CSV of past payments.
 - **LeadTags.tsx** — define tags closers/setters apply (drive ActiveCampaign segmentation + reports).
 - **Integrations.tsx** — connect external tools (webhooks, API keys, subscriptions).
@@ -359,7 +359,7 @@ Postgres on Supabase. Extensions: `uuid-ossp`, `pgcrypto` (UUID/hash helpers), p
 - **calls** — one row per recorded sales call (Fathom or manual). `lead_id`/`closer_id`/`deal_id` (set-null), `source : call_source default fathom`, `fathom_id` (unique → idempotent webhook), `fathom_share_url`, `recording_url`, `transcript_url`, `title`, `started_at`, `ended_at`, `duration_seconds`, `host_email`, `attendee_emails text[]`, `summary`, `transcript`, `outcome : call_outcome default pending`, `outcome_notes`, `outcome_tagged_by/_at`, `ai_review jsonb` (Claude review: framework_score, strengths[], improvements[], needs_review), `ai_reviewed_at`, `created_at`, `updated_at`. **Win/loss capture (0028):** `won_reason : win_reason_category`, `lost_reason : loss_reason_category`, `lost_to_competitor text`, with CHECK constraints `won_reason only if outcome=closed_won` and `lost_reason only if outcome=lost`. RLS like leads (admin / own closer / lead owner); admin-only insert+delete (Fathom webhook uses service role). Trigger `calls_apply_outcome` → `apply_call_outcome_to_lead()`.
 - **call_action_items** — action items extracted from a call. `call_id` (FK cascade), `description`, `assignee text`, `due_date`, `completed bool`, `completed_at`, `source`. Visible/editable via parent call.
 - **objections** — catalog of objection types. `label` (unique), `description`, `category : objection_category default other`. Seeded (price/timing/spouse/authority/trust/need variants). Read-all; admin manages catalog.
-- **call_objections** — M:N call↔objection. `call_id`/`objection_id` (FK cascade), `quote text`, `source`, UNIQUE `(call_id, objection_id)`. Visibility follows parent call.
+- **call_objections** — M:N call↔objection. `call_id`/`objection_id` (FK cascade), `quote text`, `source` (provenance: `'manual'` = closer-tagged vs `'ai'` = `review-call`-tagged), UNIQUE `(call_id, objection_id)`. Visibility follows parent call.
 
 #### Integrations & platform
 
@@ -434,7 +434,7 @@ Rewrite map (app domain redacted as `https://<app-domain>`; all destinations are
 
 - **calendly-webhook** — Calendly v2 (`invitee.created`/`invitee.canceled`). New booking → upsert lead, assign closer, schedule a 15-min pre-call reminder; cancellation → cancel reminder; reschedule-aware. Verifies the `calendly-webhook-signature` HMAC, or accepts unsigned when the `signing_disabled` config flag is set (Calendly Standard tier issues no key). *Trigger: webhook.*
 - **stripe-webhook** — Stripe (`checkout.session.completed`, `charge.succeeded`, `charge.refunded`, `customer.subscription.deleted`). Payment success → create deal + payment + activity, advance lead to `won`, resolve coaching tier (amount-first via `tiers.ts`, then metadata, then lead `intended_tier`), auto-assign least-loaded coach. Verifies the Stripe signature via `constructEventAsync`. *Trigger: webhook.* (Note: app-side close logging has largely moved to a manual "Log Close" dialog per `health-monitor` comments.)
-- **fathom-webhook** — Fathom "Meeting completed" call recordings. Forgiving normalizer maps many Fathom payload shapes into the `calls` table (recording/share/transcript URLs, host/attendee emails, summary, action items), links to the lead's most recent open deal, then fire-and-forget invokes **review-call** for AI scoring. Optionally verifies `X-Fathom-Secret`. *Trigger: webhook.*
+- **fathom-webhook** — Fathom "Meeting completed" call recordings. Forgiving normalizer maps many Fathom payload shapes into the `calls` table (recording/share/transcript URLs, host/attendee emails, summary, action items), links to the lead's most recent deal (by `created_at`, any status), then fire-and-forget invokes **review-call** for AI scoring. Optionally verifies `X-Fathom-Secret`. *Trigger: webhook.*
 - **slack-app** — Single function with three sub-paths configured in the Slack app: `/commands` (slash commands `/lead`, `/note`, `/student`), `/events` (Events API incl. `url_verification`), `/interactivity` (buttons/modals). Verifies the Slack signing secret (`verifySlackSignature`); replies within 3s and defers slow work. Uses `SLACK_BOT_TOKEN`, and `ANTHROPIC_API_KEY` for AI-assisted replies. *Trigger: webhook.*
 - **public-api** — see §6.5.
 - *instagram-webhook* — rewrite + an `instagram` integration config exist (IG business account id, page access token, verify token), but no function directory is deployed.
@@ -490,7 +490,7 @@ Provider catalog and config schema live in `src/lib/integrations.ts`; saved valu
 - **Discord** — welcome-channel onboarding invites and (stubbed) access revoke. Auth: **bot token** + guild/channel IDs.
 - **Whop** — membership/access provisioning; configured (API key + default product id) and referenced by the recovery flow (access pause/revoke currently stubbed).
 - **ActiveCampaign** — email-marketing integration (provider configured in the Integrations catalog with API URL/key).
-- **Fathom** — call recordings → CRM `calls`, linked to the open deal (win/loss context). Inbound auth: optional **shared secret** header (`X-Fathom-Secret` / `FATHOM_SHARED_SECRET`).
+- **Fathom** — call recordings → CRM `calls`, linked to the lead's most recent deal (win/loss context). Inbound auth: optional **shared secret** header (`X-Fathom-Secret` / `FATHOM_SHARED_SECRET`).
 - **Claude / Anthropic** — AI **call review** (`review-call`, `claude-sonnet-4-6` with cached rubric), the weekly closer-recap coaching line, and AI-assisted Slack replies. Auth: **bearer API key** (`ANTHROPIC_API_KEY` secret).
 - Additional configured providers: **Zapier** (catch-hook subscriptions via the outbound dispatcher), **Instagram** and **WhatsApp** (config present; messaging not yet wired to functions).
 
@@ -500,7 +500,7 @@ Base path proxied at `<app-domain>/api/inbound/*` → `public-api`. `verify_jwt 
 
 Endpoints:
 
-- **`POST /lead`** — scope `lead.create`. Upserts a lead (`full_name` required; optional email/phone/instagram/timezone/stage/scheduled_at/UTM fields/source/budget_cents/notes/tags), then emits the `lead.created` outbound event via `dispatchEvent`.
+- **`POST /lead`** — scope `lead.create`. Upserts a lead (`full_name` required; optional email/phone/instagram/timezone/stage/scheduled_at/UTM fields/source/budget_cents/notes/tags), then emits the `lead.created` outbound event via `dispatchEvent`. Note: API-created (and manually-created) leads land **unassigned** — only the Calendly webhook auto-derives `closer_id` (by matching the host email to an active closer/admin); no path auto-assigns a `setter_id`.
 - **`POST /payment`** — scope `payment.create`. Logs a payment (email + amount_cents required; optional currency/paid_at/stripe_charge_id/notes).
 
 Both routes are POST-only (others → 405) and share the CORS/JSON helpers. Successful operations also fan out through the outbound webhook dispatcher to any active `webhook_subscriptions`.

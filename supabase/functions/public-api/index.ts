@@ -2,45 +2,35 @@
 // Authenticated by an API key issued in the CRM (Integrations → API Keys).
 //
 // Endpoint base:  https://<project-ref>.functions.supabase.co/public-api
+//   (or, branded: https://coaching.joinecompulse.com/api/inbound)
 // Auth header:    Authorization: Bearer <api-key>
 //
 // Routes:
-//   POST /lead     → create a lead   (scope: lead.create)
-//   POST /payment  → log a payment   (scope: payment.create)
+//   POST /lead     → create a lead              (scope: lead.create)
+//   POST /payment  → log a payment              (scope: payment.create)
+//   POST /event    → UNIVERSAL inbound router   (scope depends on `event`)
+//                    Body: { "event": "lead" | "booked" | "cancelled" | "payment", ... }
+//                    One URL + one key for every automation — set `event` per Zap.
+//
+// All four behaviours live in ../_shared/booking.ts so /lead, /payment and
+// /event share one implementation. Adding a new automation = one new case here.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts"
 import { corsHeaders } from "../_shared/cors.ts"
 import { adminClient, logIntegration } from "../_shared/supabase-admin.ts"
-import { dispatchEvent } from "../_shared/dispatch.ts"
-
-interface LeadPayload {
-  full_name: string
-  email?: string
-  phone?: string
-  instagram?: string
-  timezone?: string
-  stage?: string
-  scheduled_at?: string
-  utm_source?: string
-  utm_medium?: string
-  utm_campaign?: string
-  utm_content?: string
-  utm_term?: string
-  source_landing_page?: string
-  source?: string                     // 'calendly' | 'zapier' | 'landing_page' | etc.
-  budget_cents?: number
-  notes?: string
-  tags?: string[]
-}
-
-interface PaymentPayload {
-  email: string
-  amount_cents: number
-  currency?: string
-  paid_at?: string
-  stripe_charge_id?: string
-  notes?: string
-}
+import {
+  applyBooked,
+  applyCancelled,
+  applyLead,
+  applyPayment,
+  classifyEvent,
+  type LeadInput,
+  lowerKeyed,
+  type PaymentInput,
+  toBookingInput,
+  toLeadInput,
+  toPaymentInput,
+} from "../_shared/booking.ts"
 
 function jsonResponse(body: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(body), {
@@ -93,220 +83,71 @@ serve(async (req) => {
 
   const supabase = adminClient()
 
-  // POST /lead
+  // POST /lead — generic lead intake (landing pages, ad lead-forms, partners).
   if (path === "/lead") {
     const auth = await authenticate(req, "lead.create")
     if (auth instanceof Response) return auth
-
-    let body: LeadPayload
+    let body: LeadInput
     try {
       body = await req.json()
     } catch {
       return jsonResponse({ error: "Invalid JSON body" }, { status: 400 })
     }
-
-    if (!body.full_name) {
-      return jsonResponse({ error: "full_name is required" }, { status: 400 })
-    }
-
-    // Build the row with only the fields the caller actually provided so
-    // unspecified columns are preserved on conflict (instead of being nulled).
-    const stage = body.stage ?? "new"
-    const row: Record<string, unknown> = {
-      full_name: body.full_name,
-      stage,
-      source: body.source ?? "public_api",
-    }
-    if (
-      ["booked", "confirmed", "showed", "no_show", "pitched", "won", "lost"].includes(stage)
-    ) {
-      row.booked_at = new Date().toISOString()
-    }
-    if (body.scheduled_at) row.scheduled_at = body.scheduled_at
-    if (body.budget_cents != null) row.budget_cents = body.budget_cents
-
-    const optional: (keyof LeadPayload)[] = [
-      "email",
-      "phone",
-      "instagram",
-      "timezone",
-      "utm_source",
-      "utm_medium",
-      "utm_campaign",
-      "utm_content",
-      "utm_term",
-      "source_landing_page",
-      "notes",
-    ]
-    for (const k of optional) {
-      const v = body[k]
-      if (v !== undefined && v !== null && v !== "") row[k] = v
-    }
-
-    const { data: lead, error } = await supabase
-      .from("leads")
-      .upsert(row, { onConflict: "email" })
-      .select("id")
-      .single()
-
-    if (error || !lead) {
-      await logIntegration(supabase, {
-        provider: "public_api",
-        direction: "inbound",
-        event_type: "lead.create",
-        status: "failed",
-        request_payload: body as never,
-        error: error?.message ?? "lead upsert failed",
-      })
-      return jsonResponse({ error: error?.message ?? "lead upsert failed" }, { status: 500 })
-    }
-
-    if (body.tags?.length) {
-      const { data: tagRows } = await supabase
-        .from("lead_tags")
-        .select("id, name")
-        .in("name", body.tags)
-      if (tagRows?.length) {
-        await supabase
-          .from("lead_tag_assignments")
-          .upsert(tagRows.map((t) => ({ lead_id: lead.id, tag_id: t.id })), {
-            onConflict: "lead_id,tag_id",
-          })
-      }
-    }
-
-    // Auto-queue (or update) the 15-min pre-call reminder when scheduled_at is provided.
-    // Idempotent: re-posting the same lead just updates the existing reminder's fire_at.
-    if (body.scheduled_at) {
-      const scheduledAt = new Date(body.scheduled_at)
-      if (!Number.isNaN(scheduledAt.getTime())) {
-        const fireAt = new Date(scheduledAt.getTime() - 15 * 60 * 1000).toISOString()
-
-        const { data: existing } = await supabase
-          .from("reminders")
-          .select("id")
-          .eq("lead_id", lead.id)
-          .eq("kind", "pre_call_15m")
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle()
-
-        if (existing) {
-          await supabase
-            .from("reminders")
-            .update({
-              fire_at: fireAt,
-              status: "scheduled",
-              completed_at: null,
-              payload: { scheduled_for: scheduledAt.toISOString(), source: "public_api" } as never,
-            })
-            .eq("id", existing.id)
-        } else {
-          await supabase.from("reminders").insert({
-            lead_id: lead.id,
-            kind: "pre_call_15m",
-            fire_at: fireAt,
-            payload: { scheduled_for: scheduledAt.toISOString(), source: "public_api" } as never,
-          })
-        }
-      }
-    }
-
-    await supabase.from("activities").insert({
-      lead_id: lead.id,
-      type: "public_api.lead.create",
-      payload: body as never,
-    })
-
-    await logIntegration(supabase, {
-      provider: "public_api",
-      direction: "inbound",
-      event_type: "lead.create",
-      status: "success",
-      request_payload: body as never,
-      related_lead_id: lead.id,
-    })
-
-    await dispatchEvent(supabase, {
-      event_type: "lead.created",
-      data: {
-        lead: {
-          id: lead.id,
-          full_name: body.full_name,
-          email: body.email ?? null,
-          phone: body.phone ?? null,
-          instagram: body.instagram ?? null,
-          stage: "new",
-          source: "public_api",
-          tags: body.tags ?? [],
-          utm_source: body.utm_source ?? null,
-          utm_medium: body.utm_medium ?? null,
-          utm_campaign: body.utm_campaign ?? null,
-          utm_content: body.utm_content ?? null,
-          utm_term: body.utm_term ?? null,
-          notes: body.notes ?? null,
-        },
-      },
-    })
-
-    return jsonResponse({ ok: true, lead_id: lead.id }, { status: 201 })
+    const r = await applyLead(supabase, body)
+    return jsonResponse(r.body, { status: r.status })
   }
 
-  // POST /payment
+  // POST /payment — log a payment.
   if (path === "/payment") {
     const auth = await authenticate(req, "payment.create")
     if (auth instanceof Response) return auth
-
-    let body: PaymentPayload
+    let body: PaymentInput
     try {
       body = await req.json()
     } catch {
       return jsonResponse({ error: "Invalid JSON body" }, { status: 400 })
     }
+    const r = await applyPayment(supabase, body)
+    return jsonResponse(r.body, { status: r.status })
+  }
 
-    if (!body.email || !body.amount_cents) {
-      return jsonResponse({ error: "email and amount_cents are required" }, { status: 400 })
+  // POST /event — UNIVERSAL inbound router. One URL + one API key for every
+  // automation: the `event` field ("lead" | "booked" | "cancelled" | "payment")
+  // selects the handler, and the field mapping is forgiving (case-insensitive,
+  // many aliases). Scope follows the event — payments need payment.create,
+  // everything else needs lead.create. Add a new automation = one new case.
+  if (path === "/event") {
+    let raw: unknown
+    try {
+      raw = await req.json()
+    } catch {
+      return jsonResponse({ error: "Invalid JSON body" }, { status: 400 })
     }
-
-    const { data: lead } = await supabase
-      .from("leads")
-      .select("id")
-      .eq("email", body.email)
-      .maybeSingle()
-
-    const { data: payment, error } = await supabase
-      .from("payments")
-      .insert({
-        lead_id: lead?.id ?? null,
-        amount_cents: body.amount_cents,
-        currency: body.currency ?? "EUR",
-        paid_at: body.paid_at ?? new Date().toISOString(),
-        stripe_charge_id: body.stripe_charge_id ?? null,
-        source: "manual",
-        notes: body.notes ?? null,
-      })
-      .select("id")
-      .single()
-
-    if (error) {
-      return jsonResponse({ error: error.message }, { status: 500 })
-    }
-
-    await dispatchEvent(supabase, {
-      event_type: "payment.received",
-      data: {
-        payment: {
-          id: payment?.id,
-          lead_id: lead?.id ?? null,
-          amount_cents: body.amount_cents,
-          currency: body.currency ?? "EUR",
-          paid_at: body.paid_at ?? new Date().toISOString(),
-          source: "public_api",
+    const bag = lowerKeyed(raw)
+    const event = classifyEvent(bag)
+    if (!event) {
+      return jsonResponse(
+        {
+          error:
+            'Could not determine the event. Add an "event" field set to "lead", "booked", "cancelled", or "payment".',
         },
-      },
-    })
+        { status: 400 }
+      )
+    }
 
-    return jsonResponse({ ok: true, payment_id: payment?.id }, { status: 201 })
+    const auth = await authenticate(req, event === "payment" ? "payment.create" : "lead.create")
+    if (auth instanceof Response) return auth
+
+    const result =
+      event === "lead"
+        ? await applyLead(supabase, toLeadInput(bag))
+        : event === "booked"
+          ? await applyBooked(supabase, toBookingInput(bag, raw))
+          : event === "cancelled"
+            ? await applyCancelled(supabase, toBookingInput(bag, raw))
+            : await applyPayment(supabase, toPaymentInput(bag))
+
+    return jsonResponse(result.body, { status: result.status })
   }
 
   return jsonResponse({ error: "Unknown route" }, { status: 404 })

@@ -345,3 +345,11 @@ export function inboundLeadWebhookUrl(): string | null {
   const base = publicApiBaseUrl()
   return base ? `${base}/lead` : null
 }
+
+/** Universal inbound event router — one URL + the same API key for every
+ *  automation. POST with an `event` field ("lead" | "booked" | "cancelled" |
+ *  "payment"). Routes to public-api's /event. */
+export function inboundEventWebhookUrl(): string | null {
+  const base = publicApiBaseUrl()
+  return base ? `${base}/event` : null
+}

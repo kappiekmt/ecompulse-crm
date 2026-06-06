@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { CopyableUrl } from "@/components/integrations/CopyableUrl"
 import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 import { generateApiKey } from "@/lib/apiKey"
-import { inboundLeadWebhookUrl } from "@/lib/integrations"
+import { inboundEventWebhookUrl, inboundLeadWebhookUrl } from "@/lib/integrations"
 
 interface ActiveKey {
   id: string
@@ -37,6 +37,7 @@ export function WebhookEndpointCard() {
   })
 
   const webhookUrl = inboundLeadWebhookUrl()
+  const eventUrl = inboundEventWebhookUrl()
 
   async function generate() {
     setGenerating(true)
@@ -68,14 +69,25 @@ export function WebhookEndpointCard() {
           <div className="flex flex-col">
             <span className="text-sm font-semibold">Your Webhook Endpoint</span>
             <span className="text-xs text-[var(--color-muted-foreground)]">
-              Single URL + API key for inbound leads from Zapier, landing pages, partners.
+              One URL + API key for every inbound automation — Zapier, landing pages, partners.
             </span>
           </div>
         </div>
 
         <div className="grid grid-cols-[80px_1fr] items-center gap-3">
           <span className="text-xs font-medium uppercase tracking-wider text-[var(--color-muted-foreground)]">
-            URL
+            Events
+          </span>
+          {eventUrl ? (
+            <CopyableUrl value={eventUrl} />
+          ) : (
+            <span className="rounded-md border border-dashed border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-muted-foreground)]">
+              Set Supabase URL to resolve
+            </span>
+          )}
+
+          <span className="text-xs font-medium uppercase tracking-wider text-[var(--color-muted-foreground)]">
+            Lead only
           </span>
           {webhookUrl ? (
             <CopyableUrl value={webhookUrl} />
@@ -117,6 +129,14 @@ export function WebhookEndpointCard() {
             </Button>
           </div>
         </div>
+
+        <p className="text-xs text-[var(--color-muted-foreground)]">
+          POST to <code className="font-mono">/event</code> with an{" "}
+          <code className="font-mono">event</code> field —{" "}
+          <code className="font-mono">"booked"</code>, <code className="font-mono">"cancelled"</code>,{" "}
+          <code className="font-mono">"lead"</code>, or <code className="font-mono">"payment"</code> — and the
+          same <code className="font-mono">Authorization: Bearer …</code> key. One URL for every automation.
+        </p>
 
         {revealed && (
           <div className="flex items-start gap-2 rounded-md border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 p-3 text-xs">

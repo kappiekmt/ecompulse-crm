@@ -262,6 +262,22 @@ export const AUTOMATIONS: AutomationMeta[] = [
     // "invitee.created" / "invitee.canceled" (no provider prefix).
     logEventTypes: ["invitee.created", "invitee.canceled"],
   },
+  {
+    id: "deal_log_sync",
+    name: "Deal log sync",
+    description:
+      "Inbound — the Deal & Comms tracker sheet posts each closed deal here (event:deal). Creates lead + won deal + payment, feeding the dashboard + commissions.",
+    category: "Webhook receiver",
+    icon: Receipt,
+    scheduleLabel: "On every logged deal",
+    logEventTypes: ["deal.logged"],
+    hardKnownIssues: [
+      {
+        match: /unmatched/i,
+        fix: "A closer/setter name in the sheet didn't match a CRM team member. Align the name on the Team page (a first name like \"Nick\" matches \"Nick Lastname\"), then re-run CRM Sync → Sync all rows.",
+      },
+    ],
+  },
   // Stripe webhook removed from the dashboard — payments are logged manually
   // via the CRM (Log Close dialog), no Stripe integration is in use. The
   // stripe-webhook edge function stays deployed for the day this comes back.

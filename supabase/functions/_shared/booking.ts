@@ -75,10 +75,10 @@ function asHttpUrl(value: string | null): string | null {
   return value && /^https?:\/\//.test(value) ? value : null
 }
 
-export type InboundEvent = "lead" | "booked" | "cancelled" | "payment"
+export type InboundEvent = "lead" | "booked" | "cancelled" | "payment" | "deal"
 
 /** Map the `event`/`action` field (or, failing that, payload shape) to one of
- *  the four handlers. Returns null when it can't tell — the caller 400s with a
+ *  the handlers. Returns null when it can't tell — the caller 400s with a
  *  message so a misconfigured Zap is obvious. */
 export function classifyEvent(bag: Bag): InboundEvent | null {
   const s = (pick(bag, "event", "action", "type", "event_type", "trigger") ?? "").toLowerCase()
@@ -89,6 +89,9 @@ export function classifyEvent(bag: Bag): InboundEvent | null {
     return null
   }
   if (s.includes("cancel")) return "cancelled"
+  // "deal" before "pay" so a deal row whose status mentions payment still routes
+  // to the deal handler (it creates lead + deal + payment in one shot).
+  if (s.includes("deal") || s.includes("close") || s.includes("sale")) return "deal"
   if (s.includes("pay")) return "payment"
   if (s.includes("book") || s.includes("invitee.created") || s === "created" || s.includes("schedul")) {
     return "booked"
@@ -196,6 +199,50 @@ export function toPaymentInput(bag: Bag): PaymentInput {
     paid_at: pick(bag, "paid_at", "payment_date", "created"),
     stripe_charge_id: pick(bag, "stripe_charge_id", "charge_id", "transaction_id"),
     notes: pick(bag, "notes"),
+  }
+}
+
+// A logged deal from the Google "Deal & Comms tracker" sheet. One sheet row =
+// one closed deal; the handler fans it out into lead + won-deal + payment.
+export interface DealInput {
+  deal_ref: string | null // stable per-row id (the sheet's hidden sync column)
+  lead_name: string | null
+  email?: string | null
+  offer?: string | null
+  amount_cents: number | null
+  currency?: string | null
+  closer_name?: string | null
+  setter_name?: string | null
+  status?: string | null
+  plan_type?: string | null
+  source?: string | null
+  deal_date?: string | null
+}
+
+/** Deal value arrives in major units ($713.44) from the sheet; accept
+ *  amount_cents too in case a caller pre-converts. */
+function dealAmountCents(bag: Bag): number | null {
+  const cents = pickNumber(bag, "amount_cents")
+  if (cents != null) return Math.round(cents)
+  const major = pickNumber(bag, "deal_value", "deal value", "amount", "value", "price", "contract_value")
+  if (major != null) return Math.round(major * 100)
+  return null
+}
+
+export function toDealInput(bag: Bag): DealInput {
+  return {
+    deal_ref: pick(bag, "deal_ref", "row_id", "sync_id", "id"),
+    lead_name: pick(bag, "lead_name", "lead name", "name", "full_name", "lead"),
+    email: asEmail(pick(bag, "email", "lead_email")),
+    offer: pick(bag, "offer", "product", "offer_product", "offer / product", "program"),
+    amount_cents: dealAmountCents(bag),
+    currency: pick(bag, "currency"),
+    closer_name: pick(bag, "closer", "closer_name"),
+    setter_name: pick(bag, "setter", "setter_name"),
+    status: pick(bag, "status"),
+    plan_type: pick(bag, "plan_type", "plan type", "plan"),
+    source: pick(bag, "source", "lead_source"),
+    deal_date: pick(bag, "deal_date", "date", "closed_at"),
   }
 }
 
@@ -426,6 +473,257 @@ export async function applyPayment(supabase: SupabaseClient, body: PaymentInput)
   })
 
   return { status: 201, body: { ok: true, payment_id: payment?.id } }
+}
+
+// ---------------------------------------------------------------------------
+// Deal — a closed deal logged in the Google "Deal & Comms tracker" sheet.
+//
+// One sheet row → lead (matched/created by name) + won deal + (when Paid) a
+// full-value payment. The payment insert auto-fires the commission engine
+// (closer + setter rows via the create_commission_on_payment trigger), and the
+// deal feeds the Manager Dashboard's Order Value while the payment feeds Cash
+// Collected.
+//
+// Idempotent per row: the deal is anchored on `stripe_payment_intent_id =
+// sheet:<deal_ref>` and the payment on `stripe_charge_id = sheet:<deal_ref>:p1`,
+// so backfilling the whole sheet and re-syncing edited rows is safe (re-sync
+// updates in place rather than duplicating). No new schema — it reuses the
+// existing unique `payments.stripe_charge_id` and the `deals` Stripe id column
+// as sync anchors.
+// ---------------------------------------------------------------------------
+
+interface TeamMatch {
+  id: string
+  full_name: string
+  role: string
+}
+
+/** Resolve a closer/setter NAME from the sheet to a team_member. The sheet
+ *  carries names ("Nick"), not emails, so match tolerantly: exact, then
+ *  first-name, then prefix, then substring. Returns null when nothing matches
+ *  (the deal is still logged; the caller reports which side went unmatched). */
+async function resolveTeamMemberByName(
+  supabase: SupabaseClient,
+  name: string | null | undefined
+): Promise<TeamMatch | null> {
+  const target = (name ?? "").trim().toLowerCase()
+  if (!target) return null
+  const { data } = await supabase
+    .from("team_members")
+    .select("id, full_name, role")
+    .eq("is_active", true)
+  const rows = (data ?? []) as TeamMatch[]
+  const norm = (s: string) => s.trim().toLowerCase()
+  return (
+    rows.find((r) => norm(r.full_name) === target) ??
+    rows.find((r) => norm(r.full_name).split(/\s+/)[0] === target) ??
+    rows.find((r) => norm(r.full_name).startsWith(target)) ??
+    rows.find((r) => norm(r.full_name).includes(target)) ??
+    null
+  )
+}
+
+/** Find a lead by email (if given) else by case-insensitive full name, taking
+ *  the most recent match; create one when nothing exists. */
+async function findOrCreateLead(
+  supabase: SupabaseClient,
+  name: string,
+  email: string | null | undefined,
+  source: string | null | undefined
+): Promise<{ id: string } | null> {
+  if (email) {
+    const { data } = await supabase.from("leads").select("id").eq("email", email).maybeSingle()
+    if (data) return data as { id: string }
+  }
+  const { data: byName } = await supabase
+    .from("leads")
+    .select("id")
+    .ilike("full_name", name)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (byName) return byName as { id: string }
+
+  const insertRow: Record<string, unknown> = { full_name: name, stage: "new", source: source ?? "deal_log" }
+  if (email) insertRow.email = email
+  const { data: created, error } = await supabase
+    .from("leads")
+    .insert(insertRow)
+    .select("id")
+    .single()
+  if (error || !created) return null
+  return created as { id: string }
+}
+
+function parseDealDate(value: string | null | undefined): string {
+  if (value) {
+    const d = new Date(value)
+    if (!Number.isNaN(d.getTime())) return d.toISOString()
+  }
+  return new Date().toISOString()
+}
+
+export async function applyDeal(supabase: SupabaseClient, body: DealInput): Promise<HandlerResult> {
+  if (!body.deal_ref) {
+    return { status: 400, body: { error: "deal_ref is required (a stable id for the sheet row)" } }
+  }
+  if (!body.lead_name) {
+    return { status: 400, body: { error: "lead_name is required" } }
+  }
+  if (body.amount_cents == null || body.amount_cents < 0) {
+    return { status: 400, body: { error: "deal value (amount) is required" } }
+  }
+
+  const status = (body.status ?? "").toLowerCase()
+  const isRefunded = status.includes("refund")
+  // "Paid" (or a refunded row, which was paid then refunded) means cash moved;
+  // anything else (pending / unpaid / deposit-only) logs the deal without a
+  // payment, so it counts toward Order Value but not Cash Collected yet.
+  const paidNow = status.includes("paid") || isRefunded
+  const currency = (body.currency ?? "USD").toUpperCase()
+  const closedAt = parseDealDate(body.deal_date)
+  const dealRef = `sheet:${body.deal_ref}`
+  const paymentRef = `${dealRef}:p1`
+
+  const closer = await resolveTeamMemberByName(supabase, body.closer_name)
+  const setter = await resolveTeamMemberByName(supabase, body.setter_name)
+
+  const lead = await findOrCreateLead(supabase, body.lead_name, body.email, body.source)
+  if (!lead) {
+    await logIntegration(supabase, {
+      provider: "public_api",
+      direction: "inbound",
+      event_type: "deal.logged",
+      status: "failed",
+      request_payload: body as never,
+      error: "Could not find or create the lead",
+    })
+    return { status: 500, body: { error: "Could not find or create the lead" } }
+  }
+
+  // Stamp attribution + stage on the lead so the funnel + setter commission line
+  // up. Only set what we resolved; never clobber a real assignment with a blank.
+  const leadPatch: Record<string, unknown> = {}
+  if (closer) leadPatch.closer_id = closer.id
+  if (setter) leadPatch.setter_id = setter.id
+  if (paidNow && !isRefunded) leadPatch.stage = "won"
+  if (Object.keys(leadPatch).length) {
+    await supabase.from("leads").update(leadPatch).eq("id", lead.id)
+  }
+
+  const noteBits = [
+    "Synced from Deal & Comms tracker",
+    body.plan_type ? `Plan: ${body.plan_type}` : null,
+    body.source ? `Source: ${body.source}` : null,
+    closer ? null : body.closer_name ? `⚠ unmatched closer "${body.closer_name}"` : null,
+    setter ? null : body.setter_name ? `⚠ unmatched setter "${body.setter_name}"` : null,
+  ].filter(Boolean)
+
+  const dealRow: Record<string, unknown> = {
+    lead_id: lead.id,
+    program: body.offer ?? "Deal",
+    amount_cents: body.amount_cents,
+    currency,
+    status: isRefunded ? "refunded" : "won",
+    closed_at: closedAt,
+    closed_by_id: closer?.id ?? null,
+    notes: noteBits.join(" · "),
+    stripe_payment_intent_id: dealRef,
+  }
+
+  const { data: existingDeal } = await supabase
+    .from("deals")
+    .select("id")
+    .eq("stripe_payment_intent_id", dealRef)
+    .maybeSingle()
+
+  let dealId: string
+  if (existingDeal) {
+    dealId = (existingDeal as { id: string }).id
+    await supabase.from("deals").update(dealRow).eq("id", dealId)
+  } else {
+    const { data: created, error } = await supabase.from("deals").insert(dealRow).select("id").single()
+    if (error || !created) {
+      await logIntegration(supabase, {
+        provider: "public_api",
+        direction: "inbound",
+        event_type: "deal.logged",
+        status: "failed",
+        request_payload: body as never,
+        error: error?.message ?? "deal insert failed",
+        related_lead_id: lead.id,
+      })
+      return { status: 500, body: { error: error?.message ?? "deal insert failed" } }
+    }
+    dealId = (created as { id: string }).id
+  }
+
+  // Payment — only when there's cash and a positive amount. The unique
+  // stripe_charge_id makes it idempotent; on re-sync we reconcile amount +
+  // refund flag (the clawback trigger handles a Paid→Refunded flip on update).
+  let paymentId: string | null = null
+  if (paidNow && body.amount_cents > 0) {
+    const { data: existingPay } = await supabase
+      .from("payments")
+      .select("id")
+      .eq("stripe_charge_id", paymentRef)
+      .maybeSingle()
+    if (existingPay) {
+      paymentId = (existingPay as { id: string }).id
+      await supabase
+        .from("payments")
+        .update({ amount_cents: body.amount_cents, currency, paid_at: closedAt, is_refund: isRefunded })
+        .eq("id", paymentId)
+    } else {
+      const { data: pay, error: payErr } = await supabase
+        .from("payments")
+        .insert({
+          lead_id: lead.id,
+          deal_id: dealId,
+          amount_cents: body.amount_cents,
+          currency,
+          paid_at: closedAt,
+          stripe_charge_id: paymentRef,
+          source: "import",
+          is_refund: isRefunded,
+        })
+        .select("id")
+        .single()
+      if (payErr) {
+        console.error("[booking.applyDeal] payment insert failed", payErr)
+      } else {
+        paymentId = (pay as { id: string } | null)?.id ?? null
+      }
+    }
+  }
+
+  const unmatched: string[] = []
+  if (body.closer_name && !closer) unmatched.push(`closer:${body.closer_name}`)
+  if (body.setter_name && !setter) unmatched.push(`setter:${body.setter_name}`)
+
+  await logIntegration(supabase, {
+    provider: "public_api",
+    direction: "inbound",
+    event_type: "deal.logged",
+    status: "success",
+    request_payload: body as never,
+    related_lead_id: lead.id,
+    error: unmatched.length ? `Unmatched team names — ${unmatched.join(", ")}` : undefined,
+  })
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      deal_id: dealId,
+      payment_id: paymentId,
+      lead_id: lead.id,
+      deduped: Boolean(existingDeal),
+      closer_matched: Boolean(closer),
+      setter_matched: Boolean(setter),
+      unmatched: unmatched.length ? unmatched : undefined,
+    },
+  }
 }
 
 // ---------------------------------------------------------------------------

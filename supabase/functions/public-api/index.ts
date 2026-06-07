@@ -9,8 +9,10 @@
 //   POST /lead     → create a lead              (scope: lead.create)
 //   POST /payment  → log a payment              (scope: payment.create)
 //   POST /event    → UNIVERSAL inbound router   (scope depends on `event`)
-//                    Body: { "event": "lead" | "booked" | "cancelled" | "payment", ... }
+//                    Body: { "event": "lead"|"booked"|"cancelled"|"payment"|"deal", ... }
 //                    One URL + one key for every automation — set `event` per Zap.
+//                    "deal" = a closed-deal row from the Deal & Comms sheet:
+//                    creates lead + won deal + payment (fires commissions).
 //
 // All four behaviours live in ../_shared/booking.ts so /lead, /payment and
 // /event share one implementation. Adding a new automation = one new case here.
@@ -21,6 +23,7 @@ import { adminClient, logIntegration } from "../_shared/supabase-admin.ts"
 import {
   applyBooked,
   applyCancelled,
+  applyDeal,
   applyLead,
   applyPayment,
   classifyEvent,
@@ -28,6 +31,7 @@ import {
   lowerKeyed,
   type PaymentInput,
   toBookingInput,
+  toDealInput,
   toLeadInput,
   toPaymentInput,
 } from "../_shared/booking.ts"
@@ -135,7 +139,10 @@ serve(async (req) => {
       )
     }
 
-    const auth = await authenticate(req, event === "payment" ? "payment.create" : "lead.create")
+    // payment + deal both write payments → require payment.create; the rest
+    // only need lead.create. The "Generate" button mints both scopes.
+    const needsPaymentScope = event === "payment" || event === "deal"
+    const auth = await authenticate(req, needsPaymentScope ? "payment.create" : "lead.create")
     if (auth instanceof Response) return auth
 
     const result =
@@ -145,7 +152,9 @@ serve(async (req) => {
           ? await applyBooked(supabase, toBookingInput(bag, raw))
           : event === "cancelled"
             ? await applyCancelled(supabase, toBookingInput(bag, raw))
-            : await applyPayment(supabase, toPaymentInput(bag))
+            : event === "deal"
+              ? await applyDeal(supabase, toDealInput(bag))
+              : await applyPayment(supabase, toPaymentInput(bag))
 
     return jsonResponse(result.body, { status: result.status })
   }

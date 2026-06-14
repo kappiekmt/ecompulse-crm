@@ -58,8 +58,15 @@ export interface InviteResult {
   team_member_id?: string
   user_id?: string
   email?: string
-  invite_sent_to?: string
-  redirect_to?: string
+  /** Generated temporary password the admin passes on to the member. */
+  password?: string
+  /** Role on record (echoed back, useful when re-issuing access). */
+  role?: TeamRole
+  /** True when an existing member's password was reset rather than created new. */
+  reset?: boolean
+  /** True when the password was also auto-emailed (Resend configured). */
+  emailed?: boolean
+  sign_in_url?: string
   error?: string
 }
 

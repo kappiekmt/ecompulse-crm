@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { AlertTriangle, Loader2 } from "lucide-react"
+import { Loader2 } from "lucide-react"
 import {
   Dialog,
   DialogBody,
@@ -34,7 +34,14 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
   const [slackId, setSlackId] = React.useState("")
   const [submitting, setSubmitting] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
-  const [sent, setSent] = React.useState<{ email: string } | null>(null)
+  const [sent, setSent] = React.useState<{
+    email: string
+    password: string
+    emailed: boolean
+    reset: boolean
+    signInUrl: string
+  } | null>(null)
+  const [copied, setCopied] = React.useState(false)
 
   React.useEffect(() => {
     if (!open) {
@@ -47,6 +54,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
       setSlackId("")
       setError(null)
       setSent(null)
+      setCopied(false)
     }
   }, [open])
 
@@ -69,10 +77,16 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
     })
     setSubmitting(false)
     if (!res.ok) {
-      setError(res.error ?? "Failed to send invite")
+      setError(res.error ?? "Failed to create account")
       return
     }
-    setSent({ email: res.email! })
+    setSent({
+      email: res.email!,
+      password: res.password ?? "",
+      emailed: res.emailed ?? false,
+      reset: res.reset ?? false,
+      signInUrl: res.sign_in_url ?? "",
+    })
     qc.invalidateQueries({ queryKey: ["team-list"] })
     qc.invalidateQueries({ queryKey: ["team-members"] })
   }
@@ -81,28 +95,65 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{sent ? "Invite sent" : "Invite team member"}</DialogTitle>
+          <DialogTitle>
+            {sent ? (sent.reset ? "Access re-issued" : "Account created") : "Add team member"}
+          </DialogTitle>
           <DialogDescription>
             {sent
-              ? "We emailed them a magic link. Clicking it lets them set a password and sign in."
-              : "We'll send them an invite email. They click the link → set a password → land in the CRM."}
+              ? sent.emailed
+                ? "We emailed them their login. The password is also shown below in case you want to send it yourself."
+                : "Copy the temporary password below and send it to them. They sign in with their email + this password."
+              : "We create their account with a temporary password. Send it to them → they sign in → done. No email link required."}
           </DialogDescription>
         </DialogHeader>
 
         {sent ? (
           <>
             <DialogBody>
-              <div className="rounded-md border border-[var(--color-success)]/30 bg-[var(--color-success)]/10 p-3 text-xs">
-                <span className="flex items-start gap-2">
-                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-success)]" />
-                  Invite email sent to <strong className="ml-1">{sent.email}</strong>. They'll
-                  appear in the team list immediately; once they accept, they can sign in.
-                </span>
+              <div className="flex flex-col gap-1.5">
+                <Label>Email</Label>
+                <code className="rounded-md border border-[var(--color-border)] bg-[var(--color-muted)] px-3 py-2 font-mono text-sm">
+                  {sent.email}
+                </code>
               </div>
+              <div className="flex flex-col gap-1.5">
+                <Label>Temporary password</Label>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-muted)] px-3 py-2 font-mono text-sm tracking-wide">
+                    {sent.password}
+                  </code>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(sent.password)
+                      setCopied(true)
+                      setTimeout(() => setCopied(false), 1500)
+                    }}
+                  >
+                    {copied ? "Copied" : "Copy"}
+                  </Button>
+                </div>
+              </div>
+              {sent.emailed ? (
+                <div className="rounded-md border border-[var(--color-success)]/30 bg-[var(--color-success)]/10 p-3 text-xs">
+                  ✓ We also emailed these credentials to {sent.email}.
+                </div>
+              ) : (
+                <a
+                  href={`mailto:${sent.email}?subject=${encodeURIComponent(
+                    "Your EcomPulse CRM login"
+                  )}&body=${encodeURIComponent(
+                    `Hi,\n\nYour EcomPulse CRM account is ready.\n\nSign in: ${sent.signInUrl}\nEmail: ${sent.email}\nTemporary password: ${sent.password}\n\nPlease change your password after your first sign-in.`
+                  )}`}
+                  className="text-xs font-medium text-[var(--color-primary)] underline"
+                >
+                  Open a pre-filled email to {sent.email} →
+                </a>
+              )}
               <p className="text-xs text-[var(--color-muted-foreground)]">
-                If the email doesn't arrive within a few minutes, check Supabase Auth → SMTP
-                settings (the default sender has tight rate limits — for production, configure
-                custom SMTP via Resend / SendGrid).
+                They sign in at <span className="font-mono">{sent.signInUrl}</span> with the email
+                and password above. This password is only shown once.
               </p>
             </DialogBody>
             <DialogFooter>
@@ -195,7 +246,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
               </Button>
               <Button type="submit" disabled={submitting}>
                 {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
-                Send invite
+                Create account
               </Button>
             </DialogFooter>
           </form>

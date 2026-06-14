@@ -1,13 +1,15 @@
 // POST /admin-invite { email, full_name, role, timezone?, … }
 //
-// Admin-only. Sends a real invite email via Supabase Auth's
-// inviteUserByEmail flow. The new user clicks the link in their inbox,
-// lands on /set-password, picks a password, and is then signed in.
+// Admin-only. Creates a team member with a generated password and returns that
+// password to the admin so they can pass it on. No magic link / email round-trip
+// required — the account is created already email-confirmed, so the new member
+// signs in immediately at /sign-in with their email + the generated password.
 //
-// We also insert the team_members row immediately so the admin can already
-// see them in the Team list (with status = pending until they accept).
-// If the team_members insert fails, we delete the just-created auth user
-// to avoid orphans.
+// If a member with that email already exists, we RESET their password instead
+// (idempotent "re-issue access"). Their team_members row is left untouched.
+//
+// If RESEND_API_KEY (+ ONBOARDING_FROM_EMAIL) secrets are set, we also email the
+// password automatically; otherwise the admin copies it from the UI and sends it.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
@@ -24,8 +26,7 @@ interface InviteBody {
   slack_user_id?: string | null
 }
 
-const REDIRECT_TO =
-  Deno.env.get("PUBLIC_APP_URL") ?? "https://coaching.joinecompulse.com/set-password"
+const APP_URL = Deno.env.get("PUBLIC_APP_URL") ?? "https://coaching.joinecompulse.com"
 
 function jsonResponse(body: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(body), {
@@ -34,13 +35,52 @@ function jsonResponse(body: unknown, init: ResponseInit = {}) {
   })
 }
 
+/** Readable, strong temporary password: e.g. "Ecom-7QXP-4F2K-9M". */
+function generatePassword(): string {
+  const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789" // no I/O/0/1/L ambiguity
+  const bytes = new Uint8Array(10)
+  crypto.getRandomValues(bytes)
+  const chars = Array.from(bytes, (b) => alphabet[b % alphabet.length])
+  return `Ecom-${chars.slice(0, 4).join("")}-${chars.slice(4, 8).join("")}-${chars.slice(8, 10).join("")}`
+}
+
+/** Best-effort email of the credentials via Resend. Returns true if sent. */
+async function emailPassword(to: string, fullName: string, password: string): Promise<boolean> {
+  const apiKey = Deno.env.get("RESEND_API_KEY")
+  const from = Deno.env.get("ONBOARDING_FROM_EMAIL")
+  if (!apiKey || !from) return false
+  const firstName = fullName.split(" ")[0] || "there"
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from,
+        to,
+        subject: "Your EcomPulse CRM login",
+        html: `
+          <p>Hi ${firstName},</p>
+          <p>Your EcomPulse CRM account is ready. Sign in here:</p>
+          <p><a href="${APP_URL}/sign-in">${APP_URL}/sign-in</a></p>
+          <p><strong>Email:</strong> ${to}<br/>
+             <strong>Temporary password:</strong> <code>${password}</code></p>
+          <p>Please change your password after your first sign-in.</p>
+        `,
+      }),
+    })
+    return res.ok
+  } catch (_e) {
+    return false
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, { status: 405 })
 
   const auth = req.headers.get("authorization") ?? ""
   const url = Deno.env.get("SUPABASE_URL")
-  const anon = (Deno.env.get("SB_PUBLISHABLE_KEY") ?? Deno.env.get("SUPABASE_ANON_KEY"))
+  const anon = Deno.env.get("SB_PUBLISHABLE_KEY") ?? Deno.env.get("SUPABASE_ANON_KEY")
   if (!url || !anon) return jsonResponse({ error: "Server misconfigured" }, { status: 500 })
 
   const userClient = createClient(url, anon, {
@@ -60,7 +100,9 @@ serve(async (req) => {
     return jsonResponse({ error: "Invalid JSON" }, { status: 400 })
   }
 
-  if (!body.email?.trim() || !body.full_name?.trim() || !body.role) {
+  const email = body.email?.trim().toLowerCase()
+  const fullName = body.full_name?.trim()
+  if (!email || !fullName || !body.role) {
     return jsonResponse({ error: "email, full_name, and role are required" }, { status: 400 })
   }
   if (!["admin", "closer", "setter", "coach"].includes(body.role)) {
@@ -68,49 +110,56 @@ serve(async (req) => {
   }
 
   const admin = adminClient()
+  const password = generatePassword()
 
-  // Block duplicates so we don't send a second invite to an already-existing member.
+  // Re-issue path: a member with this email already exists → just reset their password.
   const { data: existing } = await admin
     .from("team_members")
-    .select("id")
-    .eq("email", body.email.trim())
+    .select("id, user_id, role")
+    .eq("email", email)
     .maybeSingle()
+
   if (existing) {
+    if (!existing.user_id) {
+      return jsonResponse(
+        { error: "That member exists but has no linked auth user. Remove and re-add them." },
+        { status: 409 }
+      )
+    }
+    const { error: updErr } = await admin.auth.admin.updateUserById(existing.user_id, {
+      password,
+      email_confirm: true,
+    })
+    if (updErr) return jsonResponse({ error: updErr.message }, { status: 500 })
+
+    const emailed = await emailPassword(email, fullName, password)
     return jsonResponse(
-      { error: "A team member with that email already exists" },
-      { status: 409 }
+      { ok: true, reset: true, email, password, role: existing.role, emailed, sign_in_url: `${APP_URL}/sign-in` },
+      { status: 200 }
     )
   }
 
-  // Send the invite email. Supabase creates the auth user behind the scenes
-  // and emails them a magic link that lands on REDIRECT_TO.
-  const { data: invited, error: inviteErr } = await admin.auth.admin.inviteUserByEmail(
-    body.email.trim(),
-    {
-      data: { full_name: body.full_name.trim() },
-      redirectTo: REDIRECT_TO,
-    }
-  )
-
-  if (inviteErr || !invited?.user) {
+  // New member path: create the auth user already confirmed, then insert the row.
+  const { data: created, error: createErr } = await admin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { full_name: fullName },
+  })
+  if (createErr || !created?.user) {
     return jsonResponse(
-      {
-        error:
-          inviteErr?.message ??
-          "Failed to send invite. Check Supabase Auth → SMTP settings.",
-      },
+      { error: createErr?.message ?? "Failed to create user" },
       { status: 500 }
     )
   }
 
-  const userId = invited.user.id
-
+  const userId = created.user.id
   const { data: tm, error: tmErr } = await admin
     .from("team_members")
     .insert({
       user_id: userId,
-      full_name: body.full_name.trim(),
-      email: body.email.trim(),
+      full_name: fullName,
+      email,
       role: body.role,
       timezone: body.timezone ?? null,
       commission_pct: body.commission_pct ?? null,
@@ -121,19 +170,22 @@ serve(async (req) => {
     .single()
 
   if (tmErr) {
-    // Clean up the dangling invited auth user.
-    await admin.auth.admin.deleteUser(userId)
+    await admin.auth.admin.deleteUser(userId) // avoid orphaned auth user
     return jsonResponse({ error: tmErr.message }, { status: 500 })
   }
 
+  const emailed = await emailPassword(email, fullName, password)
   return jsonResponse(
     {
       ok: true,
+      reset: false,
       team_member_id: tm?.id,
       user_id: userId,
-      email: body.email.trim(),
-      invite_sent_to: body.email.trim(),
-      redirect_to: REDIRECT_TO,
+      email,
+      password,
+      role: body.role,
+      emailed,
+      sign_in_url: `${APP_URL}/sign-in`,
     },
     { status: 201 }
   )

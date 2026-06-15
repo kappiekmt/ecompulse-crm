@@ -16,10 +16,15 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import { corsHeaders } from "../_shared/cors.ts"
 import { adminClient } from "../_shared/supabase-admin.ts"
 
+type Role = "admin" | "closer" | "setter" | "coach"
+const VALID_ROLES: Role[] = ["admin", "closer", "setter", "coach"]
+
 interface InviteBody {
   email: string
   full_name: string
-  role: "admin" | "closer" | "setter" | "coach"
+  // New: a member can hold multiple roles. `role` kept for backward compat.
+  roles?: Role[]
+  role?: Role
   timezone?: string
   commission_pct?: number | null
   capacity?: number | null
@@ -102,10 +107,15 @@ serve(async (req) => {
 
   const email = body.email?.trim().toLowerCase()
   const fullName = body.full_name?.trim()
-  if (!email || !fullName || !body.role) {
-    return jsonResponse({ error: "email, full_name, and role are required" }, { status: 400 })
+  // Accept either `roles` (new) or a single `role` (back-compat). Dedupe.
+  const roles = [...new Set(body.roles ?? (body.role ? [body.role] : []))]
+  if (!email || !fullName || roles.length === 0) {
+    return jsonResponse(
+      { error: "email, full_name, and at least one role are required" },
+      { status: 400 }
+    )
   }
-  if (!["admin", "closer", "setter", "coach"].includes(body.role)) {
+  if (!roles.every((r) => VALID_ROLES.includes(r))) {
     return jsonResponse({ error: "Invalid role" }, { status: 400 })
   }
 
@@ -115,7 +125,7 @@ serve(async (req) => {
   // Re-issue path: a member with this email already exists → just reset their password.
   const { data: existing } = await admin
     .from("team_members")
-    .select("id, user_id, role")
+    .select("id, user_id, roles")
     .eq("email", email)
     .maybeSingle()
 
@@ -134,7 +144,7 @@ serve(async (req) => {
 
     const emailed = await emailPassword(email, fullName, password)
     return jsonResponse(
-      { ok: true, reset: true, email, password, role: existing.role, emailed, sign_in_url: `${APP_URL}/sign-in` },
+      { ok: true, reset: true, email, password, roles: existing.roles, emailed, sign_in_url: `${APP_URL}/sign-in` },
       { status: 200 }
     )
   }
@@ -159,8 +169,8 @@ serve(async (req) => {
     .insert({
       user_id: userId,
       full_name: fullName,
-      email,
-      role: body.role,
+      // `role` (primary) is derived from `roles` by the sync_primary_role trigger.
+      roles,
       timezone: body.timezone ?? null,
       commission_pct: body.commission_pct ?? null,
       capacity: body.capacity ?? null,
@@ -183,7 +193,7 @@ serve(async (req) => {
       user_id: userId,
       email,
       password,
-      role: body.role,
+      roles,
       emailed,
       sign_in_url: `${APP_URL}/sign-in`,
     },

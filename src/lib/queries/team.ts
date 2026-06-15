@@ -7,7 +7,9 @@ export interface TeamMemberRow {
   user_id: string | null
   full_name: string
   email: string
+  /** Primary role (highest-precedence). For display; permissions use `roles`. */
   role: TeamRole
+  roles: TeamRole[]
   timezone: string | null
   commission_pct: number | null
   capacity: number | null
@@ -24,7 +26,7 @@ export function useTeamList() {
       const { data, error } = await supabase
         .from("team_members")
         .select(
-          "id, user_id, full_name, email, role, timezone, commission_pct, capacity, is_active, slack_user_id, created_at"
+          "id, user_id, full_name, email, role, roles, timezone, commission_pct, capacity, is_active, slack_user_id, created_at"
         )
         .order("created_at", { ascending: true })
       if (error) throw error
@@ -60,8 +62,8 @@ export interface InviteResult {
   email?: string
   /** Generated temporary password the admin passes on to the member. */
   password?: string
-  /** Role on record (echoed back, useful when re-issuing access). */
-  role?: TeamRole
+  /** Roles on record (echoed back, useful when re-issuing access). */
+  roles?: TeamRole[]
   /** True when an existing member's password was reset rather than created new. */
   reset?: boolean
   /** True when the password was also auto-emailed (Resend configured). */
@@ -73,7 +75,7 @@ export interface InviteResult {
 export async function inviteTeamMember(input: {
   email: string
   full_name: string
-  role: TeamRole
+  roles: TeamRole[]
   timezone?: string
   commission_pct?: number | null
   capacity?: number | null

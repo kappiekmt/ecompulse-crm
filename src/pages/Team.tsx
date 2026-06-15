@@ -4,13 +4,14 @@ import { PageHeader } from "@/components/PageHeader"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Select } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import { InviteMemberDialog } from "@/components/team/InviteMemberDialog"
+import { RoleCheckboxes } from "@/components/team/RoleCheckboxes"
 import { useTeamList, useUpdateTeamMember, type TeamMemberRow } from "@/lib/queries/team"
 import { useDeleteTeamMember } from "@/lib/queries/teamDelete"
 import { useAuth } from "@/lib/auth"
 import { initials } from "@/lib/utils"
+import { ROLE_LABELS, sortRoles } from "@/lib/roles"
 import { normalizeSlackId } from "@/lib/slack"
 import type { TeamRole } from "@/lib/database.types"
 
@@ -144,15 +145,16 @@ function MemberRow({
   onDelete: () => void
 }) {
   const [editing, setEditing] = React.useState(false)
-  const [role, setRole] = React.useState<TeamRole>(member.role)
+  const [roles, setRoles] = React.useState<TeamRole[]>(member.roles)
   const [tz, setTz] = React.useState(member.timezone ?? "")
   const [comm, setComm] = React.useState(member.commission_pct?.toString() ?? "")
   const [cap, setCap] = React.useState(member.capacity?.toString() ?? "")
   const [slack, setSlack] = React.useState(member.slack_user_id ?? "")
 
   function save() {
+    if (roles.length === 0) return
     onPatch({
-      role,
+      roles,
       timezone: tz.trim() || null,
       commission_pct: comm ? Number(comm) : null,
       capacity: cap ? Number(cap) : null,
@@ -176,12 +178,7 @@ function MemberRow({
           </div>
         </td>
         <td className="px-4 py-3">
-          <Select value={role} onChange={(e) => setRole(e.target.value as TeamRole)}>
-            <option value="admin">admin</option>
-            <option value="closer">closer</option>
-            <option value="setter">setter</option>
-            <option value="coach">coach</option>
-          </Select>
+          <RoleCheckboxes value={roles} onChange={setRoles} />
         </td>
         <td className="px-4 py-3">
           <Input value={tz} onChange={(e) => setTz(e.target.value)} />
@@ -235,7 +232,11 @@ function MemberRow({
         </div>
       </td>
       <td className="px-4 py-3">
-        <Badge variant="outline" className="capitalize">{member.role}</Badge>
+        <div className="flex flex-wrap gap-1">
+          {sortRoles(member.roles).map((r) => (
+            <Badge key={r} variant="outline">{ROLE_LABELS[r]}</Badge>
+          ))}
+        </div>
       </td>
       <td className="px-4 py-3 text-xs text-[var(--color-muted-foreground)]">
         {member.timezone ?? "—"}

@@ -86,7 +86,7 @@ async function pickSampleCloser(
   const { data } = await supabase
     .from("team_members")
     .select("full_name, slack_user_id, timezone")
-    .in("role", ["closer", "admin"])
+    .overlaps("roles", ["closer", "admin"])
     .eq("is_active", true)
     .limit(1)
     .maybeSingle()
@@ -412,7 +412,7 @@ async function testCommissionReadiness(
   const { data: dmTargets } = await supabase
     .from("team_members")
     .select("id")
-    .in("role", ["closer", "admin"])
+    .overlaps("roles", ["closer", "admin"])
     .eq("is_active", true)
     .not("slack_user_id", "is", null)
     .limit(1)

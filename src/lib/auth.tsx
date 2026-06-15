@@ -7,7 +7,10 @@ interface TeamProfile {
   id: string
   full_name: string
   email: string
+  /** Primary role — highest-precedence role the member holds (see lib/roles). */
   role: TeamRole
+  /** Full set of roles the member holds. Drives permission breadth. */
+  roles: TeamRole[]
 }
 
 interface AuthContextValue {
@@ -15,6 +18,8 @@ interface AuthContextValue {
   user: User | null
   profile: TeamProfile | null
   loading: boolean
+  /** True if the signed-in member holds the given role. */
+  hasRole: (role: TeamRole) => boolean
   signIn: (email: string, password: string) => Promise<{ error: string | null }>
   signOut: () => Promise<void>
 }
@@ -55,10 +60,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function loadProfile(userId: string) {
     const { data } = await supabase
       .from("team_members")
-      .select("id, full_name, email, role")
+      .select("id, full_name, email, role, roles")
       .eq("user_id", userId)
       .maybeSingle()
-    if (data) setProfile(data as TeamProfile)
+    if (data) {
+      const row = data as TeamProfile & { roles: TeamRole[] | null }
+      setProfile({
+        ...row,
+        // Fall back to [role] if roles is somehow empty (e.g. mid-migration).
+        roles: row.roles?.length ? row.roles : [row.role],
+      })
+    }
   }
 
   const value: AuthContextValue = {
@@ -66,6 +78,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     user: session?.user ?? null,
     profile,
     loading,
+    hasRole: (role) => profile?.roles?.includes(role) ?? false,
     signIn: async (email, password) => {
       const { error } = await supabase.auth.signInWithPassword({ email, password })
       return { error: error?.message ?? null }

@@ -20,6 +20,9 @@ import { LeadDetailDrawer } from "@/components/leads/LeadDetailDrawer"
 import { StudentDetailDrawer } from "@/components/students/StudentDetailDrawer"
 import { StageBadge, stageLabel } from "@/components/leads/StageBadge"
 import { useAuth } from "@/lib/auth"
+import type { TeamRole } from "@/lib/database.types"
+import { primaryRole } from "@/lib/roles"
+import { RoleTabs } from "@/components/RoleTabs"
 import { useLeadsList, type LeadListRow } from "@/lib/queries/leads"
 import { useMyTodayCalls } from "@/lib/queries/me"
 import { useStudentsList, type StudentRow } from "@/lib/queries/students"
@@ -27,21 +30,29 @@ import { formatDateTime, initials } from "@/lib/utils"
 
 const DAY = 24 * 3600 * 1000
 
+const PANELS_BY_ROLE: Record<TeamRole, React.ComponentType> = {
+  closer: CloserPanels,
+  setter: SetterPanels,
+  coach: CoachPanels,
+  admin: AdminPanels,
+}
+
 export function CommandCenter() {
   const { profile } = useAuth()
-  const role = profile?.role ?? "admin"
+  const roles = profile?.roles?.length ? profile.roles : (["admin"] as TeamRole[])
+  const [active, setActive] = React.useState<TeamRole>(() => primaryRole(roles))
+  const current = roles.includes(active) ? active : primaryRole(roles)
+  const Panels = PANELS_BY_ROLE[current]
 
   return (
     <div className="flex flex-col">
       <PageHeader
         title="Command Center"
-        description={DESCRIPTION_BY_ROLE[role] ?? DESCRIPTION_BY_ROLE.admin}
+        description={DESCRIPTION_BY_ROLE[current] ?? DESCRIPTION_BY_ROLE.admin}
       />
+      <RoleTabs roles={roles} value={current} onChange={setActive} className="px-8" />
       <div className="grid grid-cols-1 gap-4 p-8 xl:grid-cols-2">
-        {role === "closer" && <CloserPanels />}
-        {role === "setter" && <SetterPanels />}
-        {role === "coach" && <CoachPanels />}
-        {role === "admin" && <AdminPanels />}
+        <Panels />
       </div>
     </div>
   )

@@ -197,7 +197,7 @@ serve(async (req) => {
       .select("id")
       .eq("email", n.host_email)
       .eq("is_active", true)
-      .in("role", ["closer", "admin"])
+      .overlaps("roles", ["closer", "admin"])
       .maybeSingle()
     closer_id = data?.id ?? null
   }

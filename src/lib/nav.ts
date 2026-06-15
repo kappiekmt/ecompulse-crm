@@ -87,10 +87,14 @@ export const NAV_SECTIONS: NavSection[] = [
   },
 ]
 
-export function navSectionsForRole(role: TeamRole | null | undefined): NavSection[] {
-  const r = role ?? "admin"
+/**
+ * Nav sections visible to a member holding ANY of the given roles — the union
+ * of each role's accessible items.
+ */
+export function navSectionsForRoles(roles: TeamRole[] | null | undefined): NavSection[] {
+  const rs = roles?.length ? roles : (["admin"] as TeamRole[])
   return NAV_SECTIONS.map((section) => ({
     ...section,
-    items: section.items.filter((item) => item.roles.includes(r)),
+    items: section.items.filter((item) => item.roles.some((r) => rs.includes(r))),
   })).filter((section) => section.items.length > 0)
 }

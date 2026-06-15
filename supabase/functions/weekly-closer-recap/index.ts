@@ -182,7 +182,7 @@ serve(async (req) => {
   const { data: closers } = await supabase
     .from("team_members")
     .select("id, full_name, slack_user_id, role")
-    .in("role", ["closer", "admin"])
+    .overlaps("roles", ["closer", "admin"])
     .eq("is_active", true)
   const list = (closers ?? []) as Closer[]
   if (list.length === 0) return jsonResponse({ ok: true, sent: 0 })

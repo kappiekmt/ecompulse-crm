@@ -1,14 +1,16 @@
 import { ChevronsUpDown, LogOut } from "lucide-react"
 import { NavLink } from "react-router-dom"
 import { useAuth } from "@/lib/auth"
-import { navSectionsForRole } from "@/lib/nav"
+import { navSectionsForRoles } from "@/lib/nav"
+import { ROLE_LABELS, sortRoles } from "@/lib/roles"
 import { cn, initials } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 
 export function Sidebar() {
   const { profile, signOut, session } = useAuth()
-  const role = profile?.role ?? "admin"
-  const sections = navSectionsForRole(role)
+  const roles = profile?.roles?.length ? profile.roles : null
+  const sections = navSectionsForRoles(roles)
+  const roleLabel = roles ? sortRoles(roles).map((r) => ROLE_LABELS[r]).join(" · ") : "preview"
 
   return (
     <aside className="flex h-full w-64 shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-card)]">
@@ -81,8 +83,8 @@ export function Sidebar() {
             <span className="truncate text-sm font-medium">
               {profile?.full_name ?? "Not signed in"}
             </span>
-            <span className="text-xs capitalize text-[var(--color-muted-foreground)]">
-              {profile?.role ?? "preview"}
+            <span className="text-xs text-[var(--color-muted-foreground)]">
+              {roleLabel}
             </span>
           </div>
         </div>

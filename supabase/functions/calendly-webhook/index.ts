@@ -153,7 +153,7 @@ serve(async (req) => {
         .select("id, full_name, slack_user_id, timezone, role")
         .eq("email", closerEmail)
         .eq("is_active", true)
-        .in("role", ["closer", "admin"])
+        .overlaps("roles", ["closer", "admin"])
         .maybeSingle()
       closerId = data?.id ?? null
       closerFullName = data?.full_name ?? null

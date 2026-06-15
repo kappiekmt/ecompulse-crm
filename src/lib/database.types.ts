@@ -97,6 +97,7 @@ export interface Database {
         full_name: string
         email: string
         role: TeamRole
+        roles: TeamRole[]
         slack_user_id: string | null
         timezone: string | null
         commission_pct: number | null

@@ -83,11 +83,11 @@ export function LogCloseDialog({
     setPaidNowEuros(String(t.price_cents / 100))
     setNotes("")
     setFuture([])
-    const initialCloser =
-      defaultCloserId ??
-      (profile?.role === "closer" || profile?.role === "admin" ? profile.id : "")
+    const isCloserOrAdmin =
+      profile?.roles?.some((r) => r === "closer" || r === "admin") ?? false
+    const initialCloser = defaultCloserId ?? (isCloserOrAdmin ? profile?.id : "")
     setCloserId(initialCloser ?? "")
-  }, [open, defaultCloserId, profile?.id, profile?.role])
+  }, [open, defaultCloserId, profile?.id, profile?.roles])
 
   function pickTier(key: TierKey) {
     setTier(key)

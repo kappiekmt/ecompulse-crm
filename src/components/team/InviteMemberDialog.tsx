@@ -13,7 +13,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Select } from "@/components/ui/select"
+import { RoleCheckboxes } from "@/components/team/RoleCheckboxes"
 import { inviteTeamMember } from "@/lib/queries/team"
 import { normalizeSlackId } from "@/lib/slack"
 import type { TeamRole } from "@/lib/database.types"
@@ -27,7 +27,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
   const qc = useQueryClient()
   const [email, setEmail] = React.useState("")
   const [fullName, setFullName] = React.useState("")
-  const [role, setRole] = React.useState<TeamRole>("closer")
+  const [roles, setRoles] = React.useState<TeamRole[]>(["closer"])
   const [timezone, setTimezone] = React.useState("Europe/Amsterdam")
   const [commission, setCommission] = React.useState("")
   const [capacity, setCapacity] = React.useState("")
@@ -47,7 +47,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
     if (!open) {
       setEmail("")
       setFullName("")
-      setRole("closer")
+      setRoles(["closer"])
       setTimezone("Europe/Amsterdam")
       setCommission("")
       setCapacity("")
@@ -65,11 +65,15 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
       setError("Email and full name are required")
       return
     }
+    if (roles.length === 0) {
+      setError("Pick at least one role")
+      return
+    }
     setSubmitting(true)
     const res = await inviteTeamMember({
       email: email.trim(),
       full_name: fullName.trim(),
-      role,
+      roles,
       timezone: timezone.trim() || undefined,
       commission_pct: commission ? Number(commission) : null,
       capacity: capacity ? Number(capacity) : null,
@@ -182,18 +186,12 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
                     onChange={(e) => setEmail(e.target.value)}
                   />
                 </div>
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="m-role">Role</Label>
-                  <Select
-                    id="m-role"
-                    value={role}
-                    onChange={(e) => setRole(e.target.value as TeamRole)}
-                  >
-                    <option value="closer">Closer</option>
-                    <option value="setter">Setter</option>
-                    <option value="coach">Coach</option>
-                    <option value="admin">Admin</option>
-                  </Select>
+                <div className="col-span-2 flex flex-col gap-1.5">
+                  <Label>Roles</Label>
+                  <RoleCheckboxes value={roles} onChange={setRoles} />
+                  <span className="text-xs text-[var(--color-muted-foreground)]">
+                    Pick one or more — e.g. someone who both books and closes can be Setter + Closer.
+                  </span>
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="m-tz">Timezone</Label>

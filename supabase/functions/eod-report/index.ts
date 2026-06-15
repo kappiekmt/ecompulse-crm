@@ -253,9 +253,9 @@ serve(async (req) => {
         .eq("is_refund", false),
       supabase
         .from("team_members")
-        .select("id, full_name, role, slack_user_id")
+        .select("id, full_name, roles, slack_user_id")
         .eq("is_active", true)
-        .in("role", ["closer", "setter"]),
+        .overlaps("roles", ["closer", "setter"]),
     ])
 
   const paymentLeadIds = [
@@ -271,7 +271,7 @@ serve(async (req) => {
   }
 
   const closers: CloserMetrics[] = (members ?? [])
-    .filter((m) => m.role === "closer")
+    .filter((m) => m.roles?.includes("closer"))
     .map((m) => {
       const calls_booked = (leadsToday ?? []).filter((l) => l.closer_id === m.id).length
       const calls_showed = (outcomesToday ?? []).filter(
@@ -302,7 +302,7 @@ serve(async (req) => {
     .sort((a, b) => b.cash_collected_cents - a.cash_collected_cents)
 
   const setters: SetterMetrics[] = (members ?? [])
-    .filter((m) => m.role === "setter")
+    .filter((m) => m.roles?.includes("setter"))
     .map((m) => ({
       setter_id: m.id,
       full_name: m.full_name,

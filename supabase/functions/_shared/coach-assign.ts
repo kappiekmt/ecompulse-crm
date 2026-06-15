@@ -11,7 +11,7 @@ export async function pickLeastLoadedCoach(
   const { data: candidates } = await client
     .from("team_members")
     .select("id, full_name")
-    .in("role", ["coach", "admin"])
+    .overlaps("roles", ["coach", "admin"])
     .eq("is_active", true)
   if (!candidates || candidates.length === 0) return null
 

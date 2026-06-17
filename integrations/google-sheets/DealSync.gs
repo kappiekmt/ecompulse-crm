@@ -9,18 +9,25 @@
  *
  * SETUP (once):
  *   1. Extensions → Apps Script, paste this file, Save.
- *   2. Run `setupCredentials` once (or use the CRM Sync menu → "Set credentials…")
- *      and paste the endpoint URL + API key.
- *   3. Run `installAutoSync` once (or menu → "Install auto-sync") and authorize.
- *   4. Menu → "CRM Sync" → "Sync all rows" to backfill existing deals.
+ *   2. CRM Sync menu → "Set credentials…" (paste endpoint URL + API key).
+ *   3. CRM Sync → "Test connection / diagnose" — confirms the key works AND
+ *      that the deal sheet is detected. Fix anything it flags before continuing.
+ *   4. CRM Sync → "Install auto-sync" and authorize. This installs BOTH an
+ *      on-edit trigger (instant) and an hourly backstop (catches non-UI edits).
+ *   5. CRM Sync → "Sync all rows" to backfill existing deals.
  *
- * After that, flipping a row's Status to Paid (or editing a row) auto-syncs it.
+ * After that, editing any deal row syncs it automatically; the hourly backstop
+ * re-syncs everything (idempotent) so updates made by imports/other tools also
+ * land even though on-edit only fires for manual edits.
  */
 
 // ── Config ──────────────────────────────────────────────────────────────────
-var SHEET_NAME = "Deal Log"; // tab to read; null = active sheet
+// SHEET_NAME is only a HINT now. The deal sheet is detected by its headers
+// ("Lead Name" + "Deal Value"), so a renamed tab no longer breaks auto-sync.
+var SHEET_NAME = "Deal Log";
 var SYNC_ID_HEADER = "CRM Sync ID"; // hidden column this script manages
 var CURRENCY = "USD"; // the sheet logs $ values
+var BACKSTOP_MINUTES = 60; // hourly safety-net re-sync (catches non-UI edits)
 
 // Header text in the sheet → payload field. Matching is case-insensitive and
 // space-insensitive, so "Offer / Product" and "offer/product" both work.
@@ -44,6 +51,7 @@ function onOpen() {
     .addItem("Sync current row", "syncCurrentRow")
     .addSeparator()
     .addItem("Install auto-sync", "installAutoSync")
+    .addItem("Test connection / diagnose", "diagnose")
     .addItem("Set credentials…", "setupCredentials")
     .addToUi();
 }
@@ -62,7 +70,7 @@ function setupCredentials() {
   if (keyResp.getSelectedButton() !== ui.Button.OK) return;
   props.setProperty("CRM_ENDPOINT", urlResp.getResponseText().trim());
   props.setProperty("CRM_API_KEY", keyResp.getResponseText().trim());
-  ui.alert("Saved. Run 'Install auto-sync' next, then 'Sync all rows' to backfill.");
+  ui.alert("Saved. Run 'Test connection / diagnose' next to confirm it works.");
 }
 
 function getConfig_() {
@@ -80,21 +88,161 @@ function installAutoSync() {
   var ss = SpreadsheetApp.getActive();
   var existing = ScriptApp.getProjectTriggers();
   for (var i = 0; i < existing.length; i++) {
-    if (existing[i].getHandlerFunction() === "onEditAutoSync") ScriptApp.deleteTrigger(existing[i]);
+    var fn = existing[i].getHandlerFunction();
+    if (fn === "onEditAutoSync" || fn === "backstopSync") ScriptApp.deleteTrigger(existing[i]);
   }
+  // Instant: installable on-edit trigger (runs with auth → can call the CRM).
   ScriptApp.newTrigger("onEditAutoSync").forSpreadsheet(ss).onEdit().create();
-  SpreadsheetApp.getUi().alert("Auto-sync installed. Edited / newly-Paid rows now sync automatically.");
+  // Safety net: time-based re-sync so edits made by imports / the Sheets API /
+  // other tools (which do NOT fire onEdit) still reach the CRM. Idempotent.
+  ScriptApp.newTrigger("backstopSync").timeBased().everyMinutes(roundTriggerMinutes_(BACKSTOP_MINUTES)).create();
+
+  var ok = countTriggers_();
+  SpreadsheetApp.getUi().alert(
+    "Auto-sync installed.\n\n• On-edit trigger: " + (ok.onEdit ? "✓" : "✗ FAILED") +
+    "\n• Hourly backstop: " + (ok.backstop ? "✓" : "✗ FAILED") +
+    "\n\nEdit a deal row to test, then check 'Test connection / diagnose' if nothing appears in the CRM."
+  );
 }
 
+function countTriggers_() {
+  var t = ScriptApp.getProjectTriggers();
+  var res = { onEdit: false, backstop: false };
+  for (var i = 0; i < t.length; i++) {
+    var fn = t[i].getHandlerFunction();
+    if (fn === "onEditAutoSync") res.onEdit = true;
+    if (fn === "backstopSync") res.backstop = true;
+  }
+  return res;
+}
+
+// everyMinutes only accepts 1,5,10,15,30; map anything else to the nearest hour.
+function roundTriggerMinutes_(m) {
+  if (m <= 1) return 1;
+  if (m <= 5) return 5;
+  if (m <= 10) return 10;
+  if (m <= 15) return 15;
+  return 30;
+}
+
+// ── Auto-sync handlers ────────────────────────────────────────────────────────
 function onEditAutoSync(e) {
   if (!e || !e.range) return;
   var sheet = e.range.getSheet();
-  if (SHEET_NAME && sheet.getName() !== SHEET_NAME) return;
-  var ctx = buildContext_(sheet);
+  // Detect the deal sheet by its HEADERS, not its tab name — a renamed tab used
+  // to silently break auto-sync. If this sheet has no deal headers, it's some
+  // other tab; ignore the edit.
+  var ctx;
+  try {
+    ctx = buildContext_(sheet);
+  } catch (err) {
+    return;
+  }
   var row = e.range.getRow();
   if (row <= ctx.headerRow) return; // header / title rows
   if (e.range.getColumn() === ctx.syncCol) return; // ignore our own stamp
-  syncRow_(sheet, ctx, row, getConfig_(), true);
+
+  var res;
+  try {
+    res = syncRow_(sheet, ctx, row, getConfig_(), true);
+  } catch (err) {
+    res = { status: "failed", message: String(err && err.message ? err.message : err) };
+  }
+  // Surface the outcome on the row's sync cell so failures aren't invisible.
+  annotateRow_(sheet, ctx, row, res);
+}
+
+// Time-based backstop: re-sync every row (idempotent) so edits that don't fire
+// onEdit (imports, Sheets API, paste from another sheet) still reach the CRM.
+function backstopSync() {
+  var sheet = findDealSheet_();
+  if (!sheet) return;
+  var ctx = buildContext_(sheet);
+  var cfg = getConfig_();
+  var last = sheet.getLastRow();
+  for (var row = ctx.headerRow + 1; row <= last; row++) {
+    try {
+      var res = syncRow_(sheet, ctx, row, cfg, true);
+      annotateRow_(sheet, ctx, row, res);
+    } catch (err) {
+      // keep going; one bad row shouldn't stop the backstop
+    }
+  }
+}
+
+/** Write a small note on the row's sync cell: clears on success, shows the
+ *  error + timestamp on failure, so problems are visible right in the sheet. */
+function annotateRow_(sheet, ctx, row, res) {
+  try {
+    var cell = sheet.getRange(row, ctx.syncCol);
+    if (res && (res.status === "ok" || res.status === "skipped")) {
+      cell.clearNote();
+    } else if (res && res.status === "warn") {
+      cell.setNote("CRM sync warning @ " + new Date() + "\n" + res.message);
+    } else {
+      cell.setNote("CRM sync FAILED @ " + new Date() + "\n" + (res ? res.message : "unknown error"));
+    }
+  } catch (err) {}
+}
+
+// ── Diagnostics ───────────────────────────────────────────────────────────────
+function diagnose() {
+  var ui = SpreadsheetApp.getUi();
+  var lines = [];
+
+  // 1. Credentials
+  var cfg = null;
+  try {
+    cfg = getConfig_();
+    lines.push("✓ Credentials set (endpoint + key).");
+    lines.push("   endpoint: " + cfg.endpoint);
+  } catch (err) {
+    lines.push("✗ " + err.message);
+  }
+
+  // 2. Deal sheet detection
+  var sheet = findDealSheet_();
+  if (sheet) {
+    var ctx = buildContext_(sheet);
+    lines.push('✓ Deal sheet detected: "' + sheet.getName() + '" (header row ' + ctx.headerRow + ").");
+    if (SHEET_NAME && sheet.getName() !== SHEET_NAME) {
+      lines.push('   ⚠ Tab is "' + sheet.getName() + '", not the configured "' + SHEET_NAME +
+        '". Auto-sync still works (detected by headers).');
+    }
+  } else {
+    lines.push('✗ No tab found with "Lead Name" + "Deal Value" headers. Auto-sync cannot run.');
+  }
+
+  // 3. Triggers installed
+  var t = countTriggers_();
+  lines.push((t.onEdit ? "✓" : "✗") + " On-edit trigger " + (t.onEdit ? "installed." : "MISSING — run 'Install auto-sync'."));
+  lines.push((t.backstop ? "✓" : "✗") + " Hourly backstop " + (t.backstop ? "installed." : "MISSING — run 'Install auto-sync'."));
+
+  // 4. Live connectivity test (no data created — uses an unrecognised event so
+  //    the CRM authenticates the key then rejects the event with a 400).
+  if (cfg) {
+    try {
+      var resp = UrlFetchApp.fetch(cfg.endpoint, {
+        method: "post",
+        contentType: "application/json",
+        headers: { Authorization: "Bearer " + cfg.apiKey },
+        payload: JSON.stringify({ event: "__connection_test__" }),
+        muteHttpExceptions: true,
+      });
+      var code = resp.getResponseCode();
+      if (code === 401 || code === 403) {
+        lines.push("✗ Connection: API key REJECTED (" + code + "). Re-generate the key in the CRM (needs lead.create + payment.create) and 'Set credentials…' again.");
+      } else if (code === 400) {
+        lines.push("✓ Connection OK — key accepted, endpoint reachable.");
+      } else {
+        lines.push("? Connection returned " + code + ": " + resp.getContentText().slice(0, 120));
+      }
+    } catch (err) {
+      lines.push("✗ Connection failed: " + err.message);
+    }
+  }
+
+  ui.alert("CRM Sync diagnostics\n\n" + lines.join("\n"));
 }
 
 // ── Sync entry points ───────────────────────────────────────────────────────
@@ -107,6 +255,7 @@ function syncCurrentRow() {
     return;
   }
   var res = syncRow_(sheet, ctx, row, getConfig_(), false);
+  annotateRow_(sheet, ctx, row, res);
   SpreadsheetApp.getActive().toast(res.message, "CRM Sync");
 }
 
@@ -121,6 +270,7 @@ function syncAllRows() {
     warned = 0;
   for (var row = ctx.headerRow + 1; row <= last; row++) {
     var res = syncRow_(sheet, ctx, row, cfg, true);
+    annotateRow_(sheet, ctx, row, res);
     if (res.status === "ok") ok++;
     else if (res.status === "skipped") skipped++;
     else if (res.status === "warn") warned++;
@@ -134,14 +284,36 @@ function syncAllRows() {
       " (unmatched closer/setter — check CRM Team names)\nSkipped (empty): " +
       skipped +
       "\nFailed: " +
-      failed
+      failed +
+      (failed ? "\n\nFailed rows have a red note on the hidden CRM Sync ID column." : "")
   );
 }
 
 // ── Core ────────────────────────────────────────────────────────────────────
 function targetSheet_() {
+  return findDealSheet_() || SpreadsheetApp.getActive().getActiveSheet();
+}
+
+/** Find the tab that has the deal headers, regardless of its name. Prefers the
+ *  configured SHEET_NAME if it qualifies. */
+function findDealSheet_() {
   var ss = SpreadsheetApp.getActive();
-  return (SHEET_NAME && ss.getSheetByName(SHEET_NAME)) || ss.getActiveSheet();
+  var preferred = SHEET_NAME ? ss.getSheetByName(SHEET_NAME) : null;
+  if (preferred && sheetHasDealHeaders_(preferred)) return preferred;
+  var sheets = ss.getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheetHasDealHeaders_(sheets[i])) return sheets[i];
+  }
+  return null;
+}
+
+function sheetHasDealHeaders_(sheet) {
+  try {
+    buildContext_(sheet);
+    return true;
+  } catch (err) {
+    return false;
+  }
 }
 
 /** Locate the header row + build a header→column map, ensuring the hidden sync
